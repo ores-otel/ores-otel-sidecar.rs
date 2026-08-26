@@ -1,0 +1,4 @@
+name = "ores-otel-sidecar.rs"
+kind = "sidecar"
+version = "0.1.0"
+
