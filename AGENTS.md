@@ -1,6 +1,10 @@
 # ores-otel — sidecar.rs
 
-Canonical `sidecar.rs` repository for [`ores-otel`](https://github.com/ores-otel).
+Canonical shared `sidecar.rs` library for [`ores-otel`](https://github.com/ores-otel).
+
+Product org sidecars (`pmap-sidecar.rs`, `hhm-sidecar.rs`, …) import this crate
+via zed-pkg (`ores-otel/ores-otel-sidecar`) and Cargo git (`rev` pin). They do
+not copy `config`/`health`/`runtime`.
 
 - Internal runtimes: Rust, TypeScript, Dart.
 - Contracts: JSON Schema in `ores-otel-interfaces`.
@@ -11,6 +15,3 @@ Canonical `sidecar.rs` repository for [`ores-otel`](https://github.com/ores-otel
 - Packages: github.com/zed-pkg.
 - Never use React/JSX or webviews.
 - Resolve git conflicts semantically; never rebase, stash, or reset.
-
-
-

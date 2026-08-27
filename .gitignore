@@ -8,5 +8,4 @@
 .env.*
 !.env.example
 *.sqlite
-Cargo.lock
 

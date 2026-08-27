@@ -1,21 +1,23 @@
-    [package]
-    name = "ores-otel-sidecar"
-    version = "0.1.0"
-    edition = "2021"
-    license = "MIT"
-    description = "Sidecar for ores-otel"
-    repository = "https://github.com/ores-otel/ores-otel-sidecar.rs"
+[package]
+name = "ores-otel-sidecar"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Shared sidecar runtime inherited by product *-sidecar.rs crates"
+repository = "https://github.com/ores-otel/ores-otel-sidecar.rs"
+readme = "README.md"
 
-    [[bin]]
-    name = "ores-otel-sidecar"
-    path = "src/main.rs"
+[lib]
+name = "ores_otel_sidecar"
+path = "src/lib.rs"
 
-    [dependencies]
-    serde = { version = "1", features = ["derive"] }
-    serde_json = "1"
-    thiserror = "2"
+[[bin]]
+name = "ores-otel-sidecar"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [lints.rust]
 unsafe_code = "forbid"
-
-
