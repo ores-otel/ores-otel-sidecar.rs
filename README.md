@@ -2,32 +2,23 @@
 
 Shared sidecar runtime for Logging, telemetry, and observability for ORESoftware runtimes.
 
-Product `*-sidecar.rs` crates inherit this crate instead of copying health/bind
-logic. Declare both:
+## I/O
 
-1. **zed-pkg** in `.zpkg.toml`:
-   ```toml
-   [dependencies]
-   "ores-otel/ores-otel-sidecar" = "^0.1.0"
-   ```
-2. **Cargo** (zed can invoke cargo for the Rust adapter):
-   ```toml
-   ores-otel-sidecar = { git = "https://github.com/ores-otel/ores-otel-sidecar.rs", rev = "<pinned-commit>" }
-   ```
+The process **does not read stdin** and **does not use stdout as a protocol**.
 
-Then run:
+| Surface | Role |
+|---|---|
+| HTTP on the bind address (loopback by default) | `/healthz`, `/readyz`, `/metrics` |
+| stderr JSON | listen/fatal diagnostics |
+| `ORES_OTEL_SIDECAR_ALLOW_NON_LOOPBACK=1` | required to bind a non-loopback unicast address; `0.0.0.0`/`::` stay rejected |
 
-```rust
-use ores_otel_sidecar::{runtime, SidecarConfig, SidecarIdentity};
+Product binaries inherit this crate:
 
-fn main() {
-    let cfg = SidecarConfig::from_env(SidecarIdentity::new(
-        "pmap-sidecar",
-        "PMAP_SIDECAR_BIND",
-    ));
-    runtime::run(&cfg);
-}
+```toml
+[dependencies]
+"ores-otel/ores-otel-sidecar" = "^0.1.0"
 ```
 
-k8s-deployable product sidecars also belong in that org's `*-monorepo` as a git
-submodule under `apps/` (or `apps/deployments/` when that layout is already in use).
+```toml
+ores-otel-sidecar = { git = "https://github.com/ores-otel/ores-otel-sidecar.rs", rev = "<pinned-commit>" }
+```

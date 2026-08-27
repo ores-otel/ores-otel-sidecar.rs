@@ -1,18 +1,30 @@
 #![forbid(unsafe_code)]
 
 use crate::config::SidecarConfig;
-use crate::health;
+use crate::error::SidecarError;
+use crate::http::{bind, serve_listener};
+use crate::log;
 use crate::probe::{NoopProbe, ProductProbe};
 
 pub fn run(config: &SidecarConfig) {
-    run_with_probe(config, &NoopProbe);
+    if let Err(err) = run_with_probe(config, &NoopProbe) {
+        log::write_stderr(config.identity.service, "fatal", err.to_string(), false);
+        std::process::exit(1);
+    }
 }
 
-pub fn run_with_probe(config: &SidecarConfig, probe: &impl ProductProbe) {
-    let payload = health::current(config.identity, probe.extra_health());
-    println!(
-        "{}",
-        serde_json::to_string(&payload).expect("health is valid json")
+pub fn run_with_probe(
+    config: &SidecarConfig,
+    probe: &impl ProductProbe,
+) -> Result<(), SidecarError> {
+    let listener = bind(config.listen)?;
+    let local = listener.local_addr().unwrap_or(config.listen);
+    log::write_stderr(
+        config.identity.service,
+        "listen",
+        format!("http://{local}/healthz"),
+        true,
     );
-    let _ = config.listen.as_str();
+    serve_listener(listener, config, probe)?;
+    Ok(())
 }

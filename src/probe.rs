@@ -2,10 +2,14 @@
 
 use serde_json::Value;
 
-/// Optional product-specific health payload.
+/// Optional product-specific health payload and readiness.
 pub trait ProductProbe {
     fn extra_health(&self) -> Option<Value> {
         None
+    }
+
+    fn ready(&self) -> bool {
+        true
     }
 }
 
