@@ -71,6 +71,8 @@ fn responses_set_hardening_headers_and_head_omits_body() {
     assert!(headers.contains("connection: close"));
     assert!(headers.contains("cache-control: no-store"));
     assert!(headers.contains("x-content-type-options: nosniff"));
+    assert!(headers.contains("x-frame-options: deny"));
+    assert!(headers.contains("content-security-policy: default-src 'none'"));
     assert!(headers.contains("content-length:"));
 
     let head = exchange(addr, "HEAD /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n");
@@ -112,4 +114,23 @@ fn chunked_and_query_and_alias_paths() {
         "POST /healthz HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
     );
     assert!(chunked.starts_with("HTTP/1.1 400") || chunked.starts_with("HTTP/1.1 405"));
+}
+
+#[test]
+fn http11_missing_host_expect_and_duplicate_length_fail_closed() {
+    let addr = serve_n(3, NoopProbe);
+    let no_host = exchange(addr, "GET /healthz HTTP/1.1\r\n\r\n");
+    assert!(no_host.starts_with("HTTP/1.1 400"), "{no_host}");
+
+    let expect = exchange(
+        addr,
+        "GET /healthz HTTP/1.1\r\nHost: localhost\r\nExpect: 100-continue\r\n\r\n",
+    );
+    assert!(expect.starts_with("HTTP/1.1 400"), "{expect}");
+
+    let duplicate = exchange(
+        addr,
+        "GET /healthz HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nContent-Length: 8\r\n\r\n",
+    );
+    assert!(duplicate.starts_with("HTTP/1.1 400"), "{duplicate}");
 }

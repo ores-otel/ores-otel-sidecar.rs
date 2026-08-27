@@ -48,6 +48,9 @@ pub fn classify_request_line(line: &str) -> Request {
     if line.len() > MAX_REQUEST_LINE {
         return Request::Reject(Reject::LineTooLong);
     }
+    if line.as_bytes().contains(&0) || line.contains('\r') {
+        return Request::Reject(Reject::Invalid);
+    }
     let mut parts = line.split(' ');
     let method = match parts.next().unwrap_or("") {
         "GET" => Method::Get,
@@ -56,10 +59,17 @@ pub fn classify_request_line(line: &str) -> Request {
         _ => return Request::Reject(Reject::MethodNotAllowed),
     };
     let path = parts.next().unwrap_or("");
-    if path.is_empty() || parts.next().is_none() {
+    let version = parts.next().unwrap_or("");
+    if path.is_empty() || (version != "HTTP/1.1" && version != "HTTP/1.0") || parts.next().is_some()
+    {
         return Request::Reject(Reject::Invalid);
     }
-    if path.contains("..") || path.contains('\\') || !path.starts_with('/') {
+    if path.contains('%')
+        || path.contains("..")
+        || path.contains('\\')
+        || path.contains('\t')
+        || !path.starts_with('/')
+    {
         return Request::Reject(Reject::NotFound);
     }
     let path = path.split('?').next().unwrap_or(path);
@@ -152,7 +162,7 @@ fn write_http(
     head_only: bool,
 ) -> std::io::Result<()> {
     let mut out = format!(
-        "HTTP/1.1 {}\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\ncache-control: no-store\r\nx-content-type-options: nosniff\r\n\r\n",
+        "HTTP/1.1 {}\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\ncache-control: no-store\r\nx-content-type-options: nosniff\r\nx-frame-options: DENY\r\ncontent-security-policy: default-src 'none'\r\n\r\n",
         status_line(code),
         content_type,
         body.len()
@@ -172,9 +182,12 @@ fn read_request(stream: &mut TcpStream) -> Request {
         Ok(_) => {}
         Err(_) => return Request::Reject(Reject::Invalid),
     }
+    let http11 = line.contains("HTTP/1.1");
     let classified = classify_request_line(&line);
     let mut headers = 0;
     let mut content_length = 0_u64;
+    let mut saw_content_length = false;
+    let mut saw_host = false;
     loop {
         line.clear();
         match reader.read_line(&mut line) {
@@ -188,17 +201,38 @@ fn read_request(stream: &mut TcpStream) -> Request {
         if line == "\r\n" || line == "\n" {
             break;
         }
+        if line.as_bytes().contains(&0) || !line.contains(':') {
+            return Request::Reject(Reject::Invalid);
+        }
         headers += 1;
         if headers > MAX_HEADERS {
             return Request::Reject(Reject::HeaderTooLarge);
         }
         let lower = line.to_ascii_lowercase();
-        if let Some(rest) = lower.strip_prefix("content-length:") {
-            content_length = rest.trim().parse().unwrap_or(usize::MAX as u64);
+        if lower.starts_with("host:") {
+            let value = line
+                .split_once(':')
+                .map(|(_, rest)| rest.trim())
+                .unwrap_or("");
+            if value.is_empty() {
+                return Request::Reject(Reject::Invalid);
+            }
+            saw_host = true;
         }
-        if lower.starts_with("transfer-encoding:") && lower.contains("chunked") {
+        if lower.starts_with("expect:") || lower.starts_with("transfer-encoding:") {
             return Request::Reject(Reject::BodyNotAllowed);
         }
+        if let Some(rest) = lower.strip_prefix("content-length:") {
+            let parsed = rest.trim().parse().unwrap_or(u64::MAX);
+            if saw_content_length && parsed != content_length {
+                return Request::Reject(Reject::Invalid);
+            }
+            saw_content_length = true;
+            content_length = parsed;
+        }
+    }
+    if matches!(classified, Request::Ok { .. }) && http11 && !saw_host {
+        return Request::Reject(Reject::Invalid);
     }
     if content_length > 0 {
         let mut sink = vec![0_u8; content_length.min(64) as usize];
@@ -346,6 +380,22 @@ mod tests {
         assert_eq!(
             classify_request_line("GET healthz HTTP/1.1"),
             Request::Reject(Reject::NotFound)
+        );
+        assert_eq!(
+            classify_request_line("GET /healthz%2e%2e HTTP/1.1"),
+            Request::Reject(Reject::NotFound)
+        );
+    }
+
+    #[test]
+    fn http2_and_extra_tokens_are_invalid() {
+        assert_eq!(
+            classify_request_line("GET /healthz HTTP/2.0"),
+            Request::Reject(Reject::Invalid)
+        );
+        assert_eq!(
+            classify_request_line("GET /healthz HTTP/1.1 extra"),
+            Request::Reject(Reject::Invalid)
         );
     }
 
