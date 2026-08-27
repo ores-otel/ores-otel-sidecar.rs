@@ -22,3 +22,7 @@ Product binaries inherit this crate:
 ```toml
 ores-otel-sidecar = { git = "https://github.com/ores-otel/ores-otel-sidecar.rs", rev = "<pinned-commit>" }
 ```
+
+Browser automation contracts (Playwright, Puppeteer, Selenium) live in
+[`ores-otel-test/ores-otel-sidecar-contract-tests`](https://github.com/ores-otel-test/ores-otel-sidecar-contract-tests).
+

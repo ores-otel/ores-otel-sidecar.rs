@@ -12,3 +12,38 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --all-targets --locked
       - run: cargo clippy --all-targets --locked -- -D warnings
+
+  browsers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked --bin ores-otel-sidecar
+      - uses: actions/checkout@v4
+        with:
+          repository: ores-otel-test/ores-otel-sidecar-contract-tests
+          path: contract-tests
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: contract-tests/package-lock.json
+      - run: npm ci
+        working-directory: contract-tests
+      - name: Serve sidecar and run Playwright, Puppeteer, and Selenium
+        env:
+          SIDECAR_URL: http://127.0.0.1:19090
+          ORES_OTEL_SIDECAR_BIND: 127.0.0.1:19090
+        run: |
+          set -euo pipefail
+          ./target/debug/ores-otel-sidecar &
+          sidecar_pid=$!
+          trap 'kill "$sidecar_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 50); do
+            if curl -sf "$SIDECAR_URL/healthz" >/dev/null; then
+              break
+            fi
+            sleep 0.1
+          done
+          curl -sf "$SIDECAR_URL/healthz" >/dev/null
+          (cd contract-tests && npm test)
