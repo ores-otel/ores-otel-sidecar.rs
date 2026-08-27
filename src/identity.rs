@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+#[path = "../generated/rust/env.rs"]
+mod env;
+
 /// Product identity for a sidecar that inherits this crate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SidecarIdentity {
@@ -9,9 +12,9 @@ pub struct SidecarIdentity {
 }
 
 impl SidecarIdentity {
-    pub const DEFAULT_BIND: &'static str = "127.0.0.1:9090";
+    pub const DEFAULT_BIND: &'static str = env::BIND_DEFAULT;
 
-    pub const ORES_OTEL: Self = Self::new("ores-otel-sidecar", "ORES_OTEL_SIDECAR_BIND");
+    pub const ORES_OTEL: Self = Self::new(env::SERVICE, env::BIND);
 
     pub const fn new(service: &'static str, bind_env: &'static str) -> Self {
         Self {
