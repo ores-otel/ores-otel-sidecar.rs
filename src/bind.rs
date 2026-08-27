@@ -76,4 +76,11 @@ mod tests {
         assert!(parse_bind("   ", false).is_err());
         assert!(parse_bind("not-a-bind", false).is_err());
     }
+
+    #[test]
+    fn ipv6_loopback_is_accepted() {
+        let addr = parse_bind("[::1]:9090", false).unwrap();
+        assert!(addr.ip().is_loopback());
+        assert_eq!(addr.port(), 9090);
+    }
 }

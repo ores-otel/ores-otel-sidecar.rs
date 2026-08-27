@@ -294,4 +294,89 @@ mod tests {
         assert!(body.contains("\"ok\":true"));
         assert!(body.contains("ores-otel-sidecar"));
     }
+
+    #[test]
+    fn aliases_and_query_strings_map_to_probes() {
+        assert_eq!(
+            classify_request_line("GET /health HTTP/1.1"),
+            Request::Ok {
+                method: Method::Get,
+                route: Route::Healthz
+            }
+        );
+        assert_eq!(
+            classify_request_line("HEAD /readyz?verbose=1 HTTP/1.1"),
+            Request::Ok {
+                method: Method::Head,
+                route: Route::Readyz
+            }
+        );
+        assert_eq!(
+            classify_request_line("GET /ready HTTP/1.1"),
+            Request::Ok {
+                method: Method::Get,
+                route: Route::Readyz
+            }
+        );
+    }
+
+    #[test]
+    fn options_trace_and_missing_version_fail_closed() {
+        assert_eq!(
+            classify_request_line("OPTIONS /healthz HTTP/1.1"),
+            Request::Reject(Reject::MethodNotAllowed)
+        );
+        assert_eq!(
+            classify_request_line("TRACE /healthz HTTP/1.1"),
+            Request::Reject(Reject::MethodNotAllowed)
+        );
+        assert_eq!(
+            classify_request_line("GET /healthz"),
+            Request::Reject(Reject::Invalid)
+        );
+        assert_eq!(classify_request_line(""), Request::Reject(Reject::Invalid));
+    }
+
+    #[test]
+    fn encoded_dots_and_backslash_are_not_found() {
+        assert_eq!(
+            classify_request_line("GET /healthz\\..\\etc HTTP/1.1"),
+            Request::Reject(Reject::NotFound)
+        );
+        assert_eq!(
+            classify_request_line("GET healthz HTTP/1.1"),
+            Request::Reject(Reject::NotFound)
+        );
+    }
+
+    struct NotReady;
+
+    impl ProductProbe for NotReady {
+        fn ready(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn unreadiness_is_503() {
+        let (code, _, body) = response_for(
+            Request::Ok {
+                method: Method::Get,
+                route: Route::Readyz,
+            },
+            SidecarIdentity::ORES_OTEL,
+            &NotReady,
+        );
+        assert_eq!(code, 503);
+        assert!(body.contains("\"ok\":false"));
+    }
+
+    #[test]
+    fn oversized_request_line_is_431() {
+        let line = format!("GET /{} HTTP/1.1", "a".repeat(3000));
+        assert_eq!(
+            classify_request_line(&line),
+            Request::Reject(Reject::LineTooLong)
+        );
+    }
 }
