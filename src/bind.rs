@@ -1,35 +1,55 @@
 #![forbid(unsafe_code)]
 
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 
 use crate::error::SidecarError;
 
-pub fn parse_bind(raw: &str, allow_non_loopback: bool) -> Result<SocketAddr, SidecarError> {
+fn parse_socket(raw: &str) -> Result<SocketAddr, SidecarError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(SidecarError::UnresolvedBind {
             value: raw.to_string(),
         });
     }
-    let addr = if let Ok(parsed) = trimmed.parse::<SocketAddr>() {
-        parsed
-    } else {
-        trimmed
-            .to_socket_addrs()
-            .map_err(|_| SidecarError::InvalidBind {
-                value: trimmed.to_string(),
-            })?
-            .next()
-            .ok_or_else(|| SidecarError::UnresolvedBind {
-                value: trimmed.to_string(),
-            })?
-    };
+    if let Ok(parsed) = trimmed.parse::<SocketAddr>() {
+        return Ok(parsed);
+    }
+    trimmed
+        .to_socket_addrs()
+        .map_err(|_| SidecarError::InvalidBind {
+            value: trimmed.to_string(),
+        })?
+        .next()
+        .ok_or_else(|| SidecarError::UnresolvedBind {
+            value: trimmed.to_string(),
+        })
+}
+
+pub fn parse_bind(raw: &str, allow_non_loopback: bool) -> Result<SocketAddr, SidecarError> {
+    let trimmed = raw.trim();
+    let addr = parse_socket(trimmed)?;
     if addr.ip().is_unspecified() || (!addr.ip().is_loopback() && !allow_non_loopback) {
         return Err(SidecarError::NonLoopbackBind {
             value: trimmed.to_string(),
         });
     }
     Ok(addr)
+}
+
+/// Address kubelet `exec` probes use: always loopback, same port as `BIND`.
+///
+/// Kubernetes `httpGet` probes connect to the **pod IP** from the node. A
+/// loopback listener is invisible to those probes. In-container `exec` of this
+/// binary's `probe` command shares the pod network namespace and must dial
+/// 127.0.0.1 / ::1, even if the env string was `0.0.0.0:port`.
+pub fn loopback_probe_addr(raw: &str) -> Result<SocketAddr, SidecarError> {
+    let addr = parse_socket(raw)?;
+    let ip = if addr.is_ipv6() {
+        IpAddr::V6(Ipv6Addr::LOCALHOST)
+    } else {
+        IpAddr::V4(Ipv4Addr::LOCALHOST)
+    };
+    Ok(SocketAddr::new(ip, addr.port()))
 }
 
 pub fn allow_non_loopback_from_env() -> bool {
@@ -107,5 +127,17 @@ mod tests {
             Some(value) => std::env::set_var(key, value),
             None => std::env::remove_var(key),
         }
+    }
+
+    #[test]
+    fn loopback_probe_addr_rewrites_unspecified_and_keeps_port() {
+        let v4 = loopback_probe_addr("0.0.0.0:9090").unwrap();
+        assert_eq!(v4.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert_eq!(v4.port(), 9090);
+        let v6 = loopback_probe_addr("[::]:19090").unwrap();
+        assert_eq!(v6.ip(), IpAddr::V6(Ipv6Addr::LOCALHOST));
+        assert_eq!(v6.port(), 19090);
+        let already = loopback_probe_addr("127.0.0.1:9090").unwrap();
+        assert!(already.ip().is_loopback());
     }
 }

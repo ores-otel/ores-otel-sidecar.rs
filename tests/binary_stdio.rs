@@ -66,6 +66,46 @@ fn binary_listens_on_loopback_and_leaves_stdout_quiet() {
 }
 
 #[test]
+fn kubelet_exec_probe_hits_loopback_and_stays_off_stdout() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ores-otel-sidecar"))
+        .env("ORES_OTEL_SIDECAR_BIND", "127.0.0.1:0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn sidecar");
+    let mut stderr = child.stderr.take().expect("stderr");
+    let port = wait_listen_port(&mut stderr);
+    let bind = format!("127.0.0.1:{port}");
+
+    let probe = Command::new(env!("CARGO_BIN_EXE_ores-otel-sidecar"))
+        .arg("probe")
+        .env("ORES_OTEL_SIDECAR_BIND", &bind)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("exec probe");
+    assert!(probe.status.success(), "probe stderr {:?}", String::from_utf8_lossy(&probe.stderr));
+    assert!(
+        probe.stdout.is_empty(),
+        "probe must not write a stdio protocol: {:?}",
+        String::from_utf8_lossy(&probe.stdout)
+    );
+
+    let missing = Command::new(env!("CARGO_BIN_EXE_ores-otel-sidecar"))
+        .arg("probe")
+        .env("ORES_OTEL_SIDECAR_BIND", "127.0.0.1:1")
+        .stdin(Stdio::null())
+        .output()
+        .expect("exec probe against a closed port");
+    assert!(!missing.status.success());
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
 fn unspecified_bind_exits_fatal_and_keeps_stdout_quiet() {
     let output = Command::new(env!("CARGO_BIN_EXE_ores-otel-sidecar"))
         .env("ORES_OTEL_SIDECAR_BIND", "0.0.0.0:19092")

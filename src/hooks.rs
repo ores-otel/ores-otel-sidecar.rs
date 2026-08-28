@@ -6,6 +6,11 @@ use serde_json::Value;
 
 use crate::probe::ProductProbe;
 
+type BindRawHook = Arc<dyn Fn(&str) -> String + Send + Sync>;
+type AllowHook = Arc<dyn Fn(bool) -> bool + Send + Sync>;
+type ExtraHealthHook = Arc<dyn Fn() -> Option<Value> + Send + Sync>;
+type ReadyHook = Arc<dyn Fn() -> bool + Send + Sync>;
+
 /// Product-specific overrides of shared sidecar behavior.
 ///
 /// Implement this on a named type when the product has real policy. Unoverridden
@@ -41,10 +46,10 @@ impl SidecarOverrides for DefaultOverrides {}
 /// ```
 #[derive(Clone, Default)]
 pub struct SidecarHooks {
-    bind_raw: Option<Arc<dyn Fn(&str) -> String + Send + Sync>>,
-    allow_non_loopback: Option<Arc<dyn Fn(bool) -> bool + Send + Sync>>,
-    extra_health: Option<Arc<dyn Fn() -> Option<Value> + Send + Sync>>,
-    ready: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+    bind_raw: Option<BindRawHook>,
+    allow_non_loopback: Option<AllowHook>,
+    extra_health: Option<ExtraHealthHook>,
+    ready: Option<ReadyHook>,
 }
 
 impl SidecarHooks {

@@ -150,3 +150,28 @@ fn http10_without_host_is_ok_and_http2_is_invalid() {
     let http2 = exchange(addr, "GET /healthz HTTP/2.0\r\nHost: localhost\r\n\r\n");
     assert!(http2.starts_with("HTTP/1.1 400"), "{http2}");
 }
+
+#[test]
+fn probe_get_reaches_loopback_and_pod_ip_does_not() {
+    let addr = serve_n(1, NoopProbe);
+    if let Some(ip) = outbound_unicast_ip() {
+        if !ip.is_loopback() {
+            let mut pod_ip = addr;
+            pod_ip.set_ip(ip);
+            assert!(
+                std::net::TcpStream::connect_timeout(&pod_ip, Duration::from_millis(250)).is_err(),
+                "kubelet httpGet to {pod_ip} must not see a 127.0.0.1 listener"
+            );
+        }
+    }
+    assert_eq!(
+        ores_otel_sidecar::http::probe_get(addr, "/healthz").unwrap(),
+        200
+    );
+}
+
+fn outbound_unicast_ip() -> Option<std::net::IpAddr> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("1.1.1.1:80").ok()?;
+    Some(socket.local_addr().ok()?.ip())
+}

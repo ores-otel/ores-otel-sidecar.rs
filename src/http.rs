@@ -281,6 +281,23 @@ pub fn bind(addr: SocketAddr) -> std::io::Result<TcpListener> {
     TcpListener::bind(addr)
 }
 
+/// One-shot GET used by in-container kubelet `exec` probes. Stdout stays unused.
+pub fn probe_get(addr: SocketAddr, path: &str) -> std::io::Result<u16> {
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+    stream.write_all(request.as_bytes())?;
+    let mut buf = String::new();
+    let _ = stream.read_to_string(&mut buf);
+    let code = buf
+        .split_whitespace()
+        .nth(1)
+        .and_then(|token| token.parse().ok())
+        .unwrap_or(0);
+    Ok(code)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
