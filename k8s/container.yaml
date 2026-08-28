@@ -1,0 +1,43 @@
+# Copy this container next to the app container. Do not add port 9090 to the
+# app Service: kubelet `httpGet` uses the pod IP, which cannot reach a loopback
+# listener, and a sidecar readinessProbe would take the app out of rotation.
+#
+# Replace `ores-otel-sidecar` with the product binary name (athleto-sidecar, …).
+- name: otel-sidecar
+  image: ghcr.io/ores-otel/ores-otel-sidecar:main
+  imagePullPolicy: IfNotPresent
+  args: []
+  stdin: false
+  tty: false
+  env:
+    - name: ORES_OTEL_SIDECAR_BIND
+      value: 127.0.0.1:9090
+  # No containerPort and no sidecar readiness probe: this process is not on the
+  # Service datapath. Logs go to stderr JSON for Promtail/Loki.
+  livenessProbe:
+    exec:
+      command: ["/ores-otel-sidecar", "probe"]
+    initialDelaySeconds: 3
+    periodSeconds: 20
+    timeoutSeconds: 2
+    failureThreshold: 3
+  securityContext:
+    allowPrivilegeEscalation: false
+    privileged: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+      ephemeral-storage: 16Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+      ephemeral-storage: 64Mi

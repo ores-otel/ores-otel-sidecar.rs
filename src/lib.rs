@@ -9,6 +9,7 @@ pub mod bind;
 pub mod config;
 pub mod error;
 pub mod health;
+pub mod hooks;
 pub mod http;
 pub mod identity;
 pub mod log;
@@ -18,6 +19,7 @@ pub mod runtime;
 pub use config::SidecarConfig;
 pub use error::SidecarError;
 pub use health::Health;
+pub use hooks::{DefaultOverrides, SidecarHooks, SidecarOverrides};
 pub use identity::{SidecarEnv, SidecarIdentity};
 pub use probe::{NoopProbe, ProductProbe};
 

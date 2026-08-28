@@ -98,7 +98,7 @@ fn status_line(code: u16) -> &'static str {
 pub fn response_for(
     request: Request,
     identity: SidecarIdentity,
-    probe: &impl ProductProbe,
+    probe: &(impl ProductProbe + ?Sized),
 ) -> (u16, &'static str, String) {
     match request {
         Request::Reject(Reject::MethodNotAllowed) => (
@@ -242,7 +242,11 @@ fn read_request(stream: &mut TcpStream) -> Request {
     classified
 }
 
-pub fn handle_connection(mut stream: TcpStream, config: &SidecarConfig, probe: &impl ProductProbe) {
+pub fn handle_connection(
+    mut stream: TcpStream,
+    config: &SidecarConfig,
+    probe: &(impl ProductProbe + ?Sized),
+) {
     let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
     let request = read_request(&mut stream);
@@ -260,7 +264,7 @@ pub fn handle_connection(mut stream: TcpStream, config: &SidecarConfig, probe: &
 pub fn serve_listener(
     listener: TcpListener,
     config: &SidecarConfig,
-    probe: &impl ProductProbe,
+    probe: &(impl ProductProbe + ?Sized),
 ) -> std::io::Result<()> {
     listener.set_nonblocking(false)?;
     for incoming in listener.incoming() {
@@ -275,6 +279,23 @@ pub fn serve_listener(
 
 pub fn bind(addr: SocketAddr) -> std::io::Result<TcpListener> {
     TcpListener::bind(addr)
+}
+
+/// One-shot GET used by in-container kubelet `exec` probes. Stdout stays unused.
+pub fn probe_get(addr: SocketAddr, path: &str) -> std::io::Result<u16> {
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+    stream.write_all(request.as_bytes())?;
+    let mut buf = String::new();
+    let _ = stream.read_to_string(&mut buf);
+    let code = buf
+        .split_whitespace()
+        .nth(1)
+        .and_then(|token| token.parse().ok())
+        .unwrap_or(0);
+    Ok(code)
 }
 
 #[cfg(test)]

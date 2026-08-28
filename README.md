@@ -23,6 +23,52 @@ Product binaries inherit this crate:
 ores-otel-sidecar = { git = "https://github.com/ores-otel/ores-otel-sidecar.rs", rev = "<pinned-commit>" }
 ```
 
+## Overrides
+
+`from_env` keeps shared defaults. Pass `SidecarHooks` (closure bag) or a
+`SidecarOverrides` impl when a product needs to rewrite bind, refuse a public
+listen, or supply `/readyz` / extra `/healthz` payload. Unset hooks fall through.
+
+```rust
+#[path = "../generated/rust/env.rs"]
+mod env;
+#[path = "../generated/rust/runtime.rs"]
+mod env_runtime;
+
+use ores_otel_sidecar::{runtime, SidecarConfig, SidecarHooks, SidecarIdentity};
+
+fn main() {
+    let values = env_runtime::load_from_os();
+    let cfg = SidecarConfig::from_env_with(
+        SidecarIdentity::new(env::SERVICE, env::BIND),
+        SidecarHooks::new()
+            .bind_raw(move |_| values.bind.clone())
+            .allow_non_loopback(move |from_env| from_env && values.allow_non_loopback)
+            .ready(|| true),
+    );
+    runtime::run(&cfg);
+}
+```
+
+Named policy types work the same way: implement `SidecarOverrides` (and
+`ProductProbe`) and pass that value to `from_env_with`. `runtime::run` uses those
+overrides as the probe; tests can still call `run_with_probe` with a different one.
+
+## Kubernetes ([oresoftware/k8s-cluster](https://github.com/ORESoftware/k8s-cluster))
+
+The sidecar binds **loopback**. kubelet `httpGet` probes the **pod IP**, so those
+probes would fail and must not be used. Copy [`k8s/container.yaml`](k8s/container.yaml)
+next to the app container:
+
+- `exec` liveness: same binary `probe` (no curl, distroless-safe)
+- **no** `readinessProbe` (a down sidecar must not remove the app from a Service)
+- **no** `containerPort` / Service port 9090
+- **no** `hostPort`, **no** `0.0.0.0`
+- stdout unused; Promtail/Loki read stderr JSON
+
+`runtime::run` handles `probe` / `probe-readyz` argv so product binaries inherit
+the exec check without a second process image.
+
 Browser automation contracts (Playwright, Puppeteer, Selenium) live in
 [`ores-otel-test/ores-otel-sidecar-contract-tests`](https://github.com/ores-otel-test/ores-otel-sidecar-contract-tests).
 
