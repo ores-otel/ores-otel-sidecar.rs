@@ -18,5 +18,8 @@ pub mod runtime;
 pub use config::SidecarConfig;
 pub use error::SidecarError;
 pub use health::Health;
-pub use identity::SidecarIdentity;
+pub use identity::{SidecarEnv, SidecarIdentity};
 pub use probe::{NoopProbe, ProductProbe};
+
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
