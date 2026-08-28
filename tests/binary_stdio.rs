@@ -64,3 +64,23 @@ fn binary_listens_on_loopback_and_leaves_stdout_quiet() {
         String::from_utf8_lossy(&output.stdout)
     );
 }
+
+#[test]
+fn unspecified_bind_exits_fatal_and_keeps_stdout_quiet() {
+    let output = Command::new(env!("CARGO_BIN_EXE_ores-otel-sidecar"))
+        .env("ORES_OTEL_SIDECAR_BIND", "0.0.0.0:19092")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn sidecar");
+    assert!(!output.status.success(), "unspecified bind must fail closed");
+    assert!(
+        output.stdout.is_empty(),
+        "stdout must stay protocol-free: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("fatal"), "{stderr}");
+    assert!(stderr.contains("0.0.0.0") || stderr.contains("non-loopback"), "{stderr}");
+}

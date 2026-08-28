@@ -134,3 +134,19 @@ fn http11_missing_host_expect_and_duplicate_length_fail_closed() {
     );
     assert!(duplicate.starts_with("HTTP/1.1 400"), "{duplicate}");
 }
+
+#[test]
+fn http10_without_host_is_ok_and_http2_is_invalid() {
+    let addr = serve_n(3, NoopProbe);
+    let http10 = exchange(addr, "GET /healthz HTTP/1.0\r\n\r\n");
+    assert!(http10.starts_with("HTTP/1.1 200 OK"), "{http10}");
+
+    let encoded = exchange(
+        addr,
+        "GET /healthz%2e%2e HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    );
+    assert!(encoded.starts_with("HTTP/1.1 404"), "{encoded}");
+
+    let http2 = exchange(addr, "GET /healthz HTTP/2.0\r\nHost: localhost\r\n\r\n");
+    assert!(http2.starts_with("HTTP/1.1 400"), "{http2}");
+}

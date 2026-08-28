@@ -1,0 +1,25 @@
+# flags-2-env surface for `ores-otel-sidecar`
+[identity]
+service = "ores-otel-sidecar"
+type_name = "SidecarEnv"
+
+[help]
+url = "https://github.com/ores-otel/ores-otel-sidecar.rs"
+columns = ["options", "env", "type", "default", "description"]
+
+[parse]
+allow_unknown = false
+
+[flags.bind]
+env = "ORES_OTEL_SIDECAR_BIND"
+long = "bind"
+type = "string"
+default = "127.0.0.1:9090"
+help = "HTTP listen address for /healthz /readyz /metrics."
+
+[flags.allow-non-loopback]
+env = "ORES_OTEL_SIDECAR_ALLOW_NON_LOOPBACK"
+long = "allow-non-loopback"
+type = "bool"
+default = false
+help = "Allow a non-loopback unicast bind address."

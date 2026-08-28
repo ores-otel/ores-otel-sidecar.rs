@@ -34,7 +34,7 @@ pub fn parse_bind(raw: &str, allow_non_loopback: bool) -> Result<SocketAddr, Sid
 
 pub fn allow_non_loopback_from_env() -> bool {
     matches!(
-        std::env::var("ORES_OTEL_SIDECAR_ALLOW_NON_LOOPBACK")
+        std::env::var(crate::identity::ALLOW_NON_LOOPBACK)
             .ok()
             .as_deref()
             .map(str::trim),
@@ -82,5 +82,30 @@ mod tests {
         let addr = parse_bind("[::1]:9090", false).unwrap();
         assert!(addr.ip().is_loopback());
         assert_eq!(addr.port(), 9090);
+    }
+
+    #[test]
+    fn whitespace_around_loopback_is_accepted() {
+        let addr = parse_bind("  127.0.0.1:9090  ", false).unwrap();
+        assert!(addr.ip().is_loopback());
+    }
+
+    #[test]
+    fn allow_non_loopback_env_is_fail_closed_and_uses_generated_key() {
+        let _guard = crate::ENV_LOCK.lock().unwrap();
+        let key = crate::identity::ALLOW_NON_LOOPBACK;
+        let previous = std::env::var(key).ok();
+        std::env::remove_var(key);
+        assert!(!allow_non_loopback_from_env());
+        std::env::set_var(key, "false");
+        assert!(!allow_non_loopback_from_env());
+        std::env::set_var(key, "1");
+        assert!(allow_non_loopback_from_env());
+        std::env::set_var(key, "true");
+        assert!(allow_non_loopback_from_env());
+        match previous {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
     }
 }

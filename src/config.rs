@@ -54,5 +54,35 @@ mod tests {
         )
         .unwrap();
         assert!(cfg.listen.ip().is_loopback());
+        assert_eq!(cfg.listen.port(), 9090);
+    }
+
+    #[test]
+    fn try_from_env_reads_identity_bind_key() {
+        let _guard = crate::ENV_LOCK.lock().unwrap();
+        let identity = SidecarIdentity::new("ores-otel-sidecar", "ORES_OTEL_SIDECAR_TEST_BIND");
+        std::env::set_var(identity.bind_env, "127.0.0.1:19191");
+        let cfg = SidecarConfig::try_from_env(identity).unwrap();
+        assert_eq!(cfg.listen.port(), 19191);
+        assert!(cfg.listen.ip().is_loopback());
+        std::env::remove_var(identity.bind_env);
+    }
+
+    #[test]
+    fn try_from_env_rejects_unspecified_even_when_override_is_off() {
+        let _guard = crate::ENV_LOCK.lock().unwrap();
+        let identity = SidecarIdentity::new("ores-otel-sidecar", "ORES_OTEL_SIDECAR_TEST_BIND");
+        let previous_allow = std::env::var(crate::identity::ALLOW_NON_LOOPBACK).ok();
+        std::env::remove_var(crate::identity::ALLOW_NON_LOOPBACK);
+        std::env::set_var(identity.bind_env, "0.0.0.0:9090");
+        assert!(matches!(
+            SidecarConfig::try_from_env(identity),
+            Err(SidecarError::NonLoopbackBind { .. })
+        ));
+        std::env::remove_var(identity.bind_env);
+        match previous_allow {
+            Some(value) => std::env::set_var(crate::identity::ALLOW_NON_LOOPBACK, value),
+            None => std::env::remove_var(crate::identity::ALLOW_NON_LOOPBACK),
+        }
     }
 }

@@ -369,6 +369,13 @@ mod tests {
             Request::Reject(Reject::Invalid)
         );
         assert_eq!(classify_request_line(""), Request::Reject(Reject::Invalid));
+        assert_eq!(
+            classify_request_line("GET /healthz HTTP/1.0"),
+            Request::Ok {
+                method: Method::Get,
+                route: Route::Healthz
+            }
+        );
     }
 
     #[test]
