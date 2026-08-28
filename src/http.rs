@@ -98,7 +98,7 @@ fn status_line(code: u16) -> &'static str {
 pub fn response_for(
     request: Request,
     identity: SidecarIdentity,
-    probe: &impl ProductProbe,
+    probe: &(impl ProductProbe + ?Sized),
 ) -> (u16, &'static str, String) {
     match request {
         Request::Reject(Reject::MethodNotAllowed) => (
@@ -242,7 +242,11 @@ fn read_request(stream: &mut TcpStream) -> Request {
     classified
 }
 
-pub fn handle_connection(mut stream: TcpStream, config: &SidecarConfig, probe: &impl ProductProbe) {
+pub fn handle_connection(
+    mut stream: TcpStream,
+    config: &SidecarConfig,
+    probe: &(impl ProductProbe + ?Sized),
+) {
     let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
     let request = read_request(&mut stream);
@@ -260,7 +264,7 @@ pub fn handle_connection(mut stream: TcpStream, config: &SidecarConfig, probe: &
 pub fn serve_listener(
     listener: TcpListener,
     config: &SidecarConfig,
-    probe: &impl ProductProbe,
+    probe: &(impl ProductProbe + ?Sized),
 ) -> std::io::Result<()> {
     listener.set_nonblocking(false)?;
     for incoming in listener.incoming() {
