@@ -9,7 +9,7 @@ The process **does not read stdin** and **does not use stdout as a protocol**.
 | Surface | Role |
 |---|---|
 | HTTP on the bind address (loopback by default) | `/healthz`, `/readyz`, `/metrics` |
-| stderr JSON | listen/fatal diagnostics |
+| stderr JSON | closed, payload-free failure diagnostics for an independent platform collector |
 | `ORES_OTEL_SIDECAR_ALLOW_NON_LOOPBACK=1` | required to bind a non-loopback unicast address; `0.0.0.0`/`::` stay rejected |
 
 Product binaries inherit this crate:
@@ -64,7 +64,14 @@ next to the app container:
 - **no** `readinessProbe` (a down sidecar must not remove the app from a Service)
 - **no** `containerPort` / Service port 9090
 - **no** `hostPort`, **no** `0.0.0.0`
-- stdout unused; Promtail/Loki read stderr JSON
+- stdout unused; the platform collector routes stderr JSON to CloudWatch,
+  Google Cloud Logging, Azure Monitor, or Loki without invoking ORES/OTLP
+
+The stderr record conforms to `ores.otel.log/internal-diagnostic/v1`. It uses
+only fixed sidecar operation/outcome enums and bounded counters; argv, bind
+values, OS errors, URLs, headers, and credentials are never serialized. Keep
+the sidecar cloud-SDK-free and use workload-identity-backed platform agents for
+cloud delivery.
 
 `runtime::run` handles `probe` / `probe-readyz` argv so product binaries inherit
 the exec check without a second process image.

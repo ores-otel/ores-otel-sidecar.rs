@@ -162,7 +162,7 @@ fn write_http(
     head_only: bool,
 ) -> std::io::Result<()> {
     let mut out = format!(
-        "HTTP/1.1 {}\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\ncache-control: no-store\r\nx-content-type-options: nosniff\r\nx-frame-options: DENY\r\ncontent-security-policy: default-src 'none'\r\n\r\n",
+        "HTTP/1.1 {}\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\ncache-control: no-store\r\nx-content-type-options: nosniff\r\nx-frame-options: DENY\r\ncontent-security-policy: default-src 'none'; connect-src 'self'\r\n\r\n",
         status_line(code),
         content_type,
         body.len()

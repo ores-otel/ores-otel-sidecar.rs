@@ -8,6 +8,7 @@ use crate::bind::{allow_non_loopback_from_env, parse_bind};
 use crate::error::SidecarError;
 use crate::hooks::{DefaultOverrides, SidecarOverrides};
 use crate::identity::SidecarIdentity;
+use crate::log::{Operation, Outcome, Severity};
 
 #[derive(Clone)]
 pub struct SidecarConfig {
@@ -39,8 +40,14 @@ impl SidecarConfig {
     ) -> Self {
         match Self::try_from_env_with(identity, overrides) {
             Ok(config) => config,
-            Err(err) => {
-                crate::log::write_stderr(identity.service, "fatal", err.to_string(), false);
+            Err(_error) => {
+                crate::log::write_stderr(
+                    identity.service,
+                    Severity::Fatal,
+                    Operation::SidecarConfigure,
+                    Outcome::Rejected,
+                    false,
+                );
                 std::process::exit(1);
             }
         }

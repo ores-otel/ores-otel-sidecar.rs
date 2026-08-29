@@ -4,6 +4,7 @@ use crate::config::SidecarConfig;
 use crate::error::SidecarError;
 use crate::http::{bind, probe_get, serve_listener};
 use crate::log;
+use crate::log::{Operation, Outcome, Severity};
 use crate::probe::ProductProbe;
 
 pub fn run(config: &SidecarConfig) {
@@ -18,21 +19,50 @@ pub fn run(config: &SidecarConfig) {
 pub fn run_or_probe(config: &SidecarConfig) {
     match std::env::args().nth(1).as_deref() {
         Some("probe") | Some("probe-healthz") => {
-            std::process::exit(probe_exit(config.listen, "/healthz"));
+            let code = probe_exit(config.listen, "/healthz");
+            if code != 0 {
+                log::write_stderr(
+                    config.identity.service,
+                    Severity::Error,
+                    Operation::SidecarProbe,
+                    Outcome::Failed,
+                    true,
+                );
+            }
+            std::process::exit(code);
         }
-        Some("probe-readyz") => std::process::exit(probe_exit(config.listen, "/readyz")),
-        Some(other) => {
+        Some("probe-readyz") => {
+            let code = probe_exit(config.listen, "/readyz");
+            if code != 0 {
+                log::write_stderr(
+                    config.identity.service,
+                    Severity::Error,
+                    Operation::SidecarProbe,
+                    Outcome::Failed,
+                    true,
+                );
+            }
+            std::process::exit(code);
+        }
+        Some(_other) => {
             log::write_stderr(
                 config.identity.service,
-                "fatal",
-                format!("unknown argument {other:?}; expected probe, probe-healthz, or probe-readyz"),
+                Severity::Fatal,
+                Operation::SidecarConfigure,
+                Outcome::Rejected,
                 false,
             );
             std::process::exit(2);
         }
         None => {
-            if let Err(err) = run_with_probe(config, config.overrides()) {
-                log::write_stderr(config.identity.service, "fatal", err.to_string(), false);
+            if let Err(_error) = run_with_probe(config, config.overrides()) {
+                log::write_stderr(
+                    config.identity.service,
+                    Severity::Fatal,
+                    Operation::SidecarListen,
+                    Outcome::Failed,
+                    false,
+                );
                 std::process::exit(1);
             }
         }
@@ -51,13 +81,6 @@ pub fn run_with_probe(
     probe: &(impl ProductProbe + ?Sized),
 ) -> Result<(), SidecarError> {
     let listener = bind(config.listen)?;
-    let local = listener.local_addr().unwrap_or(config.listen);
-    log::write_stderr(
-        config.identity.service,
-        "listen",
-        format!("http://{local}/healthz"),
-        true,
-    );
     serve_listener(listener, config, probe)?;
     Ok(())
 }
