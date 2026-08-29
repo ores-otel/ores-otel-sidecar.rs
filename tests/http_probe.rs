@@ -72,7 +72,7 @@ fn responses_set_hardening_headers_and_head_omits_body() {
     assert!(headers.contains("cache-control: no-store"));
     assert!(headers.contains("x-content-type-options: nosniff"));
     assert!(headers.contains("x-frame-options: deny"));
-    assert!(headers.contains("content-security-policy: default-src 'none'"));
+    assert!(headers.contains("content-security-policy: default-src 'none'; connect-src 'self'"));
     assert!(headers.contains("content-length:"));
 
     let head = exchange(addr, "HEAD /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n");
