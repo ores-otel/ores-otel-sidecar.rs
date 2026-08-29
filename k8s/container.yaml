@@ -13,7 +13,8 @@
     - name: ORES_OTEL_SIDECAR_BIND
       value: 127.0.0.1:9090
   # No containerPort and no sidecar readiness probe: this process is not on the
-  # Service datapath. Logs go to stderr JSON for Promtail/Loki.
+  # Service datapath. Closed diagnostics go to stderr JSON for the independent
+  # platform collector (CloudWatch, Cloud Logging, Azure Monitor, or Loki).
   livenessProbe:
     exec:
       command: ["/ores-otel-sidecar", "probe"]

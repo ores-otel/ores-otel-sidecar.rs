@@ -1,50 +1,61 @@
 #![forbid(unsafe_code)]
 
-use std::io::{BufRead, Read, Write};
-use std::net::TcpStream;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-fn wait_listen_port(stderr: &mut impl Read) -> u16 {
-    let mut reader = std::io::BufReader::new(stderr);
+fn reserve_loopback_port() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("reserve loopback port");
+    listener.local_addr().expect("reserved address").port()
+}
+
+fn connect_when_ready(port: u16) -> TcpStream {
     let deadline = Instant::now() + Duration::from_secs(5);
-    let mut line = String::new();
     while Instant::now() < deadline {
-        line.clear();
-        if reader.read_line(&mut line).unwrap_or(0) == 0 {
-            thread::sleep(Duration::from_millis(20));
-            continue;
+        if let Ok(stream) = TcpStream::connect(("127.0.0.1", port)) {
+            return stream;
         }
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line.trim()) {
-            if value["event"] == "listen" {
-                let message = value["message"].as_str().unwrap_or("");
-                let hostport = message
-                    .trim_start_matches("http://")
-                    .trim_end_matches("/healthz");
-                if let Some(port) = hostport.rsplit(':').next() {
-                    return port.parse().expect("listen port");
-                }
-            }
-        }
+        thread::sleep(Duration::from_millis(20));
     }
-    panic!("sidecar never logged a listen event");
+    panic!("sidecar never listened on reserved loopback port {port}");
+}
+
+fn assert_closed_diagnostic(stderr: &[u8], operation: &str) {
+    let text = String::from_utf8_lossy(stderr);
+    let value: serde_json::Value = serde_json::from_str(text.trim()).expect("one JSON diagnostic");
+    assert_eq!(value["schema"], "ores.otel.log/internal-diagnostic/v1");
+    assert_eq!(value["component"], "sidecar");
+    assert_eq!(value["operation"], operation);
+    for forbidden in [
+        "message",
+        "error",
+        "stack",
+        "url",
+        "authorization",
+        "token",
+        "password",
+    ] {
+        assert!(
+            value.get(forbidden).is_none(),
+            "forbidden {forbidden}: {text}"
+        );
+    }
 }
 
 #[test]
 fn binary_listens_on_loopback_and_leaves_stdout_quiet() {
-    let bind = "127.0.0.1:0";
+    let port = reserve_loopback_port();
+    let bind = format!("127.0.0.1:{port}");
     let mut child = Command::new(env!("CARGO_BIN_EXE_ores-otel-sidecar"))
-        .env("ORES_OTEL_SIDECAR_BIND", bind)
+        .env("ORES_OTEL_SIDECAR_BIND", &bind)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn sidecar");
-    let mut stderr = child.stderr.take().expect("stderr");
-    let port = wait_listen_port(&mut stderr);
-
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let mut stream = connect_when_ready(port);
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
@@ -67,16 +78,16 @@ fn binary_listens_on_loopback_and_leaves_stdout_quiet() {
 
 #[test]
 fn kubelet_exec_probe_hits_loopback_and_stays_off_stdout() {
+    let port = reserve_loopback_port();
+    let bind = format!("127.0.0.1:{port}");
     let mut child = Command::new(env!("CARGO_BIN_EXE_ores-otel-sidecar"))
-        .env("ORES_OTEL_SIDECAR_BIND", "127.0.0.1:0")
+        .env("ORES_OTEL_SIDECAR_BIND", &bind)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn sidecar");
-    let mut stderr = child.stderr.take().expect("stderr");
-    let port = wait_listen_port(&mut stderr);
-    let bind = format!("127.0.0.1:{port}");
+    drop(connect_when_ready(port));
 
     let probe = Command::new(env!("CARGO_BIN_EXE_ores-otel-sidecar"))
         .arg("probe")
@@ -86,7 +97,11 @@ fn kubelet_exec_probe_hits_loopback_and_stays_off_stdout() {
         .stderr(Stdio::piped())
         .output()
         .expect("exec probe");
-    assert!(probe.status.success(), "probe stderr {:?}", String::from_utf8_lossy(&probe.stderr));
+    assert!(
+        probe.status.success(),
+        "probe stderr {:?}",
+        String::from_utf8_lossy(&probe.stderr)
+    );
     assert!(
         probe.stdout.is_empty(),
         "probe must not write a stdio protocol: {:?}",
@@ -100,6 +115,7 @@ fn kubelet_exec_probe_hits_loopback_and_stays_off_stdout() {
         .output()
         .expect("exec probe against a closed port");
     assert!(!missing.status.success());
+    assert_closed_diagnostic(&missing.stderr, "sidecar_probe");
 
     let _ = child.kill();
     let _ = child.wait();
@@ -114,13 +130,44 @@ fn unspecified_bind_exits_fatal_and_keeps_stdout_quiet() {
         .stderr(Stdio::piped())
         .output()
         .expect("spawn sidecar");
-    assert!(!output.status.success(), "unspecified bind must fail closed");
+    assert!(
+        !output.status.success(),
+        "unspecified bind must fail closed"
+    );
     assert!(
         output.stdout.is_empty(),
         "stdout must stay protocol-free: {:?}",
         String::from_utf8_lossy(&output.stdout)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("fatal"), "{stderr}");
-    assert!(stderr.contains("0.0.0.0") || stderr.contains("non-loopback"), "{stderr}");
+    assert!(!stderr.contains("0.0.0.0"), "{stderr}");
+    assert!(!stderr.contains("non-loopback"), "{stderr}");
+    assert_closed_diagnostic(&output.stderr, "sidecar_configure");
+}
+
+#[test]
+fn hostile_argument_and_bind_values_never_reach_diagnostics() {
+    let argument_secret = "Authorization=Bearer-synthetic-argv-secret";
+    let unknown = Command::new(env!("CARGO_BIN_EXE_ores-otel-sidecar"))
+        .arg(argument_secret)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run sidecar with hostile argument");
+    assert_eq!(unknown.status.code(), Some(2));
+    assert!(!String::from_utf8_lossy(&unknown.stderr).contains(argument_secret));
+    assert_closed_diagnostic(&unknown.stderr, "sidecar_configure");
+
+    let bind_secret = "not-a-bind-Bearer-synthetic-env-secret";
+    let invalid_bind = Command::new(env!("CARGO_BIN_EXE_ores-otel-sidecar"))
+        .env("ORES_OTEL_SIDECAR_BIND", bind_secret)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run sidecar with hostile bind");
+    assert_eq!(invalid_bind.status.code(), Some(1));
+    assert!(!String::from_utf8_lossy(&invalid_bind.stderr).contains(bind_secret));
+    assert_closed_diagnostic(&invalid_bind.stderr, "sidecar_configure");
 }

@@ -38,10 +38,21 @@ fn assert_unintrusive(manifest: &str) {
         manifest.contains("stdin: false"),
         "sidecar must not take stdin from the pod"
     );
-    assert!(
-        manifest.contains("drop:"),
-        "capabilities must be dropped"
-    );
+    assert!(manifest.contains("drop:"), "capabilities must be dropped");
+    let lower = manifest.to_ascii_lowercase();
+    for forbidden in [
+        "aws_access_key",
+        "aws_secret",
+        "google_application_credentials",
+        "azure_client_secret",
+        "client_secret",
+        "bearer_token",
+    ] {
+        assert!(
+            !lower.contains(forbidden),
+            "sidecar manifests must use platform collection, not static credential {forbidden}"
+        );
+    }
 }
 
 #[test]
