@@ -1,0 +1,10 @@
+# Sidecar images carry no secrets. Keep env plaintext and ciphertext out.
+.git
+.github
+target
+node_modules
+.env
+.env.*
+*.env
+**/*.env
+env
