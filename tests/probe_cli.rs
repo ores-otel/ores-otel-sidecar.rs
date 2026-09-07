@@ -26,14 +26,20 @@ fn bounded_probe_accepts_only_a_success_status() {
         b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
         Duration::ZERO,
     );
-    assert_eq!(probe_get(ok_address, "/healthz"), Ok(200));
+    assert_eq!(
+        probe_get(ok_address, "/healthz").expect("read healthy status"),
+        200
+    );
     ok_server.join().expect("join success server");
 
     let (unhealthy_address, unhealthy_server) = serve_once(
         b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
         Duration::ZERO,
     );
-    assert_eq!(probe_get(unhealthy_address, "/healthz"), Ok(503));
+    assert_eq!(
+        probe_get(unhealthy_address, "/healthz").expect("read unhealthy status"),
+        503
+    );
     unhealthy_server.join().expect("join unhealthy server");
 }
 
@@ -41,7 +47,10 @@ fn bounded_probe_accepts_only_a_success_status() {
 fn malformed_and_refused_probe_targets_fail_closed() {
     let (malformed_address, malformed_server) =
         serve_once(b"not-http\r\n\r\n", Duration::ZERO);
-    assert_eq!(probe_get(malformed_address, "/healthz"), Ok(0));
+    assert_eq!(
+        probe_get(malformed_address, "/healthz").expect("read malformed response"),
+        0
+    );
     malformed_server.join().expect("join malformed server");
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("reserve refused port");
