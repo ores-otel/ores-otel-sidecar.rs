@@ -1,0 +1,34 @@
+name: Rust launcher image
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rust-launcher-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  image:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate pin and host smoke script
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Eq '^[0-9a-f]{40}$' docker/ores-launcher.rev
+          test "$(wc -l < docker/ores-launcher.rev)" -eq 1
+          bash -n docker/test-launcher-image.sh
+      - name: Build actual application and launcher for native architecture
+        run: docker build --progress=plain --target runtime --tag ores-launcher:ci .
+      - name: Certify the shell-free image contract
+        run: bash docker/test-launcher-image.sh ores-launcher:ci /ores-otel-sidecar
