@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bind;
+pub mod cli;
 pub mod config;
 pub mod error;
 pub mod health;
@@ -16,6 +17,7 @@ pub mod log;
 pub mod probe;
 pub mod runtime;
 
+pub use cli::{CliError, CliResolution, SidecarCommand};
 pub use config::SidecarConfig;
 pub use error::SidecarError;
 pub use health::Health;

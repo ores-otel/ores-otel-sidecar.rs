@@ -7,8 +7,12 @@ type_name = "SidecarEnv"
 url = "https://github.com/ores-otel/ores-otel-sidecar.rs"
 columns = ["options", "env", "type", "default", "description"]
 
+[env]
+load = false
+
 [parse]
 allow_unknown = false
+command_env = "ORES_OTEL_SIDECAR_COMMAND"
 
 [flags.bind]
 env = "ORES_OTEL_SIDECAR_BIND"
@@ -23,3 +27,12 @@ long = "allow-non-loopback"
 type = "bool"
 default = false
 help = "Allow a non-loopback unicast bind address."
+
+[commands.probe]
+aliases = ["probe-healthz"]
+env = "ORES_OTEL_SIDECAR_COMMAND_PROBE"
+help = "Run one bounded loopback GET against /healthz and exit."
+
+[commands.probe-readyz]
+env = "ORES_OTEL_SIDECAR_COMMAND_PROBE_READYZ"
+help = "Run one bounded loopback GET against /readyz and exit."

@@ -31,11 +31,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry,sharin
     && cp "target/release/ores-otel-sidecar" "/usr/local/bin/ores-otel-sidecar"
 
 FROM gcr.io/distroless/cc-debian12:nonroot
-# Binary lives at /<bin> so kubelet exec ["/ores-otel-sidecar", "probe"] matches the
-# ores-otel sidecar contract (no curl, no /usr/local/bin prefix required).
+WORKDIR /
+# The binary and its read-only flags-2-env authority are both required at
+# runtime; no shell, curl, package manager, or writable root filesystem is used.
 COPY --from=build --chown=65532:65532 "/usr/local/bin/ores-otel-sidecar" "/ores-otel-sidecar"
+COPY --from=build --chown=65532:65532 --chmod=0444 "/src/.cli-flags.toml" "/.cli-flags.toml"
 ENV ORES_OTEL_SIDECAR_BIND=127.0.0.1:9090 \
-    ORES_OTEL_SIDECAR_BIND=127.0.0.1:9090 \
     OTEL_SERVICE_NAME=ores-otel-sidecar
 USER 65532:65532
 ENTRYPOINT ["/ores-otel-sidecar"]
