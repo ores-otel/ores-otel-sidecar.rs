@@ -50,8 +50,7 @@ fn bounded_probe_accepts_only_a_success_status() {
 
 #[test]
 fn malformed_refused_and_unsupported_probe_targets_fail_closed() {
-    let (malformed_address, malformed_server) =
-        serve_once(b"not-http\r\n\r\n", Duration::ZERO);
+    let (malformed_address, malformed_server) = serve_once(b"not-http\r\n\r\n", Duration::ZERO);
     assert!(probe_get(malformed_address, "/healthz").is_err());
     malformed_server.join().expect("join malformed server");
 

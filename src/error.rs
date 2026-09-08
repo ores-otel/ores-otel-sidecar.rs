@@ -44,7 +44,10 @@ mod tests {
             value: "0.0.0.0:9090".into(),
         };
         let shown = err.to_string();
-        assert!(shown.contains(crate::identity::ALLOW_NON_LOOPBACK), "{shown}");
+        assert!(
+            shown.contains(crate::identity::ALLOW_NON_LOOPBACK),
+            "{shown}"
+        );
         assert!(shown.contains("0.0.0.0:9090"), "{shown}");
     }
 }

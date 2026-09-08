@@ -4,7 +4,7 @@
 mod env;
 
 pub use env::{
-    ALLOW_NON_LOOPBACK, ALLOW_NON_LOOPBACK_DEFAULT, BIND, BIND_DEFAULT, SERVICE, SidecarEnv,
+    SidecarEnv, ALLOW_NON_LOOPBACK, ALLOW_NON_LOOPBACK_DEFAULT, BIND, BIND_DEFAULT, SERVICE,
 };
 
 /// Product identity for a sidecar that inherits this crate.
