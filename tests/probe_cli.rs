@@ -15,8 +15,23 @@ fn serve_once(response: &'static [u8], delay: Duration) -> (SocketAddr, thread::
         stream
             .set_read_timeout(Some(Duration::from_secs(1)))
             .expect("set fixture read timeout");
-        let mut request = [0_u8; 1024];
-        let _ = stream.read(&mut request);
+        let mut request = Vec::with_capacity(1024);
+        let mut chunk = [0_u8; 256];
+        while request.len() < 1024 && !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+            let remaining = 1024 - request.len();
+            let chunk_len = chunk.len().min(remaining);
+            let bytes_read = stream
+                .read(&mut chunk[..chunk_len])
+                .expect("read fixture request");
+            if bytes_read == 0 {
+                break;
+            }
+            request.extend_from_slice(&chunk[..bytes_read]);
+        }
+        assert!(
+            request.windows(4).any(|bytes| bytes == b"\r\n\r\n"),
+            "probe request must contain a complete bounded HTTP header"
+        );
         if !delay.is_zero() {
             thread::sleep(delay);
         }
