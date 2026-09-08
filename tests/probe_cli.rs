@@ -44,19 +44,17 @@ fn bounded_probe_accepts_only_a_success_status() {
 }
 
 #[test]
-fn malformed_and_refused_probe_targets_fail_closed() {
+fn malformed_refused_and_unsupported_probe_targets_fail_closed() {
     let (malformed_address, malformed_server) =
         serve_once(b"not-http\r\n\r\n", Duration::ZERO);
-    assert_eq!(
-        probe_get(malformed_address, "/healthz").expect("read malformed response"),
-        0
-    );
+    assert!(probe_get(malformed_address, "/healthz").is_err());
     malformed_server.join().expect("join malformed server");
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("reserve refused port");
     let refused_address = listener.local_addr().expect("reserved address");
     drop(listener);
     assert!(probe_get(refused_address, "/healthz").is_err());
+    assert!(probe_get(refused_address, "/not-a-probe").is_err());
 }
 
 #[test]
