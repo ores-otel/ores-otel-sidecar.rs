@@ -11,6 +11,10 @@ pub mod config;
 pub mod error;
 pub mod health;
 pub mod hooks;
+#[allow(dead_code)]
+#[path = "http.rs"]
+mod http_impl;
+#[path = "http_api.rs"]
 pub mod http;
 pub mod identity;
 pub mod log;
