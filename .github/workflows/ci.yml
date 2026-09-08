@@ -47,3 +47,38 @@ jobs:
           done
           curl -sf "$SIDECAR_URL/healthz" >/dev/null
           (cd contract-tests && npm test)
+
+  distroless-exec-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the real distroless image
+        run: docker build --tag ores-otel-sidecar:ci .
+      - name: Exercise kubelet-style exec probes
+        run: |
+          set -euo pipefail
+          docker run --detach \
+            --name ores-otel-sidecar-probe \
+            --read-only \
+            --security-opt=no-new-privileges \
+            ores-otel-sidecar:ci
+          trap 'docker rm --force ores-otel-sidecar-probe >/dev/null 2>&1 || true' EXIT
+
+          ready=0
+          for _ in $(seq 1 50); do
+            if docker exec ores-otel-sidecar-probe /ores-otel-sidecar probe; then
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          test "$ready" -eq 1
+
+          docker exec ores-otel-sidecar-probe /ores-otel-sidecar probe-healthz
+          docker exec ores-otel-sidecar-probe /ores-otel-sidecar probe-readyz
+
+          if docker exec ores-otel-sidecar-probe \
+            /ores-otel-sidecar --definitely-not-declared; then
+            echo "unknown arguments must fail closed" >&2
+            exit 1
+          fi
