@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::thread;
 use std::time::Duration;
@@ -12,6 +12,11 @@ fn serve_once(response: &'static [u8], delay: Duration) -> (SocketAddr, thread::
     let address = listener.local_addr().expect("test listener address");
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept probe connection");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("set fixture read timeout");
+        let mut request = [0_u8; 1024];
+        let _ = stream.read(&mut request);
         if !delay.is_zero() {
             thread::sleep(delay);
         }
