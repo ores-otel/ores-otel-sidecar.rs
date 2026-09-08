@@ -77,9 +77,7 @@ where
         .parse_structured(argv, Some(config_path))
         .map_err(|_| CliError::ParserUnavailable)?;
 
-    if !parsed.errors.is_empty()
-        || !parsed.unknown_options.is_empty()
-        || !parsed.extras.is_empty()
+    if !parsed.errors.is_empty() || !parsed.unknown_options.is_empty() || !parsed.extras.is_empty()
     {
         return Err(CliError::InvalidArguments);
     }
@@ -150,11 +148,7 @@ mod tests {
     #[test]
     fn argv_flags_override_process_environment_after_a_command() {
         let resolved = resolve(
-            &argv(&[
-                "ores-otel-sidecar",
-                "probe",
-                "--bind=127.0.0.1:19191",
-            ]),
+            &argv(&["ores-otel-sidecar", "probe", "--bind=127.0.0.1:19191"]),
             [("ORES_OTEL_SIDECAR_BIND".into(), "127.0.0.1:19090".into())],
             &config_path(),
         )
