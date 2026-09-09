@@ -1,7 +1,8 @@
 //! Shared k8s sidecar runtime inherited by product `*-sidecar.rs` crates.
 //!
 //! The process listens on loopback HTTP for `/healthz`, `/readyz`, and `/metrics`.
-//! Protocol never uses stdin or stdout; diagnostics go to stderr as JSON.
+//! The optional dual-stream receiver module is transport-only and never makes
+//! product backend/export policy decisions. Diagnostics go to stderr as JSON.
 
 #![forbid(unsafe_code)]
 
@@ -19,6 +20,7 @@ mod http_impl;
 pub mod identity;
 pub mod log;
 pub mod probe;
+pub mod receiver;
 pub mod runtime;
 
 pub use cli::{CliError, CliResolution, SidecarCommand};
@@ -28,6 +30,10 @@ pub use health::Health;
 pub use hooks::{DefaultOverrides, SidecarHooks, SidecarOverrides};
 pub use identity::{SidecarEnv, SidecarIdentity};
 pub use probe::{NoopProbe, ProductProbe};
+pub use receiver::{
+    receive_all, receive_one, ReceiverError, ReceiverFrame, ReceiverLimits,
+    DEFAULT_MAX_DATA_CHUNK_BYTES, DEFAULT_MAX_METADATA_LINE_BYTES,
+};
 
 #[cfg(test)]
 pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
