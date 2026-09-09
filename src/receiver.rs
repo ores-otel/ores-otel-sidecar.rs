@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt, io::{self, BufRead, Read}};
+use std::{
+    fmt,
+    io::{self, BufRead, Read},
+};
 
 use serde_json::Value;
 
@@ -22,10 +25,15 @@ impl fmt::Display for ReceiverError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => write!(f, "receiver I/O failed: {error}"),
-            Self::MetadataTooLarge => write!(f, "receiver metadata line exceeds the configured bound"),
+            Self::MetadataTooLarge => {
+                write!(f, "receiver metadata line exceeds the configured bound")
+            }
             Self::InvalidMetadata => write!(f, "receiver metadata is not a JSON object"),
             Self::MissingSchemaVersion => write!(f, "receiver metadata is missing schemaVersion"),
-            Self::InvalidByteLength => write!(f, "receiver metadata byteLength must be a non-negative integer"),
+            Self::InvalidByteLength => write!(
+                f,
+                "receiver metadata byteLength must be a non-negative integer"
+            ),
             Self::DataChunkTooLarge { requested, maximum } => write!(
                 f,
                 "receiver data chunk requests {requested} bytes, above the {maximum}-byte bound"
@@ -82,7 +90,11 @@ fn read_bounded_line(
     loop {
         let available = reader.fill_buf()?;
         if available.is_empty() {
-            return if line.is_empty() { Ok(None) } else { Ok(Some(line)) };
+            return if line.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(line))
+            };
         }
         let newline = available.iter().position(|byte| *byte == b'\n');
         let take = newline.map_or(available.len(), |position| position + 1);
@@ -92,7 +104,7 @@ fn read_bounded_line(
         line.extend_from_slice(&available[..take]);
         reader.consume(take);
         if newline.is_some() {
-            while matches!(line.last(), Some(b'\n' | b'\r')) {
+            while matches!(line.last(), Some(byte) if *byte == b'\n' || *byte == b'\r') {
                 line.pop();
             }
             return Ok(Some(line));
@@ -119,8 +131,11 @@ pub fn receive_one(
     let Some(line) = read_bounded_line(metadata_reader, limits.max_metadata_line_bytes)? else {
         return Ok(None);
     };
-    let metadata: Value = serde_json::from_slice(&line).map_err(|_| ReceiverError::InvalidMetadata)?;
-    let object = metadata.as_object().ok_or(ReceiverError::InvalidMetadata)?;
+    let metadata: Value =
+        serde_json::from_slice(&line).map_err(|_| ReceiverError::InvalidMetadata)?;
+    let object = metadata
+        .as_object()
+        .ok_or(ReceiverError::InvalidMetadata)?;
     if !object
         .get("schemaVersion")
         .and_then(Value::as_str)
@@ -216,7 +231,10 @@ mod tests {
                 max_data_chunk_bytes: 16,
             },
         );
-        assert!(matches!(result, Err(ReceiverError::DataChunkTooLarge { .. })));
+        assert!(matches!(
+            result,
+            Err(ReceiverError::DataChunkTooLarge { .. })
+        ));
         assert_eq!(data_input.position(), 0);
     }
 
