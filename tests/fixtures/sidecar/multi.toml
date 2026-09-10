@@ -1,0 +1,28 @@
+schema = "ores.sidecar/config/v1"
+
+[[sidecars]]
+id = "first-sidecar"
+path = "../first"
+runtime_mutable = ["LOG_FILTER"]
+
+[sidecars.runtime_updates]
+provider = "disabled"
+mode = "disabled"
+poll_seconds = 180
+namespace = "first/runtime"
+
+[[sidecars]]
+id = "second-sidecar"
+path = "../second"
+startup_config = ".cli-flags.toml"
+runtime_mutable = ["FEATURE_FLAGS_JSON"]
+
+[[sidecars.values]]
+key = "FEATURE_FLAGS_JSON"
+value = "{}"
+
+[sidecars.runtime_updates]
+provider = "ores-redis-lru-cache"
+mode = "receive-only"
+poll_seconds = 180
+namespace = "second/runtime"

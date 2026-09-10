@@ -50,10 +50,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry,sharin
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 WORKDIR /
 # Keep the application path stable for direct invocations and kubelet probes.
-# The flags-2-env schema is immutable runtime input; no shell, curl, package
-# manager, or writable root filesystem is required.
+# The flags-2-env schema and sidecar runtime policy are immutable image inputs;
+# no shell, curl, package manager, or writable root filesystem is required.
 COPY --from=build --chown=65532:65532 "/usr/local/bin/ores-otel-sidecar" "/ores-otel-sidecar"
 COPY --from=build --chown=65532:65532 --chmod=0444 "/src/.cli-flags.toml" "/.cli-flags.toml"
+COPY --from=build --chown=65532:65532 --chmod=0444 "/src/.ores-sidecar.toml" "/.ores-sidecar.toml"
 COPY --from=launcher-build --chmod=0555 /launcher/bin/ores-launcher /ores-launcher
 ENV ORES_OTEL_SIDECAR_BIND=127.0.0.1:9090 \
     OTEL_SERVICE_NAME=ores-otel-sidecar

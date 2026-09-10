@@ -46,6 +46,54 @@ environment, dotenv overrides, then argv-provided flags. This repository turns
 dotenv loading off, so normal deployments reduce that to process environment
 then argv.
 
+## `.ores-sidecar.toml` and runtime values
+
+`.ores-sidecar.toml` is the sidecar composition/runtime-policy contract; it does
+not replace `.cli-flags.toml` or duplicate its startup argv/env authority. The
+same file shape supports one sidecar in a product repository or many sidecars
+in a central fleet file. Every `[[sidecars]]` entry has an explicit identity,
+optional relative path, startup-config path, runtime-update policy, and its own
+runtime-mutable allowlist.
+
+```toml
+schema = "ores.sidecar/config/v1"
+
+[[sidecars]]
+id = "ores-otel-sidecar"
+path = "."
+startup_config = ".cli-flags.toml"
+runtime_mutable = ["LOG_FILTER", "REQUEST_TIMEOUT_MS"]
+
+[sidecars.runtime_updates]
+provider = "ores-redis-lru-cache"
+mode = "receive-only"
+poll_seconds = 180
+namespace = "ores-otel-sidecar/runtime"
+```
+
+`SidecarConfig::with_sidecar_file` resolves the exact entry matching
+`SidecarIdentity.service`. `with_optional_sidecar_file` treats only a missing
+file as absent; malformed TOML, an unsupported schema, duplicate identities,
+an absent matching identity, incompatible update policy, duplicate runtime
+keys, or secret-like runtime keys fail closed.
+
+The returned `RuntimeValues` handle is cloneable and shared. A future/current
+`ores-redis-lru-cache` adapter can keep that handle and call `apply_patch` when
+Redis Pub/Sub or the bounded reconciliation poll produces updates. Patches are
+validated completely before taking the write lock, are restricted to the
+entry's explicit allowlist, reject secret-like keys, and never call
+`std::env::set_var`. Startup-only settings such as the listener bind therefore
+cannot be accidentally "hot reconfigured" without rebuilding the listener.
+The v1 Redis integration is receive-only so sidecar-local changes cannot create
+a Redis feedback loop.
+
+The externally serialized file shape has two independent human-authored
+contract authorities: `contracts/sidecar/main.tsp` and
+`contracts/sidecar/authored.schema.json`. CI runs the pinned
+`ORESoftware/typespec-json-schema-validator` action over both authorities and a
+recorded valid/invalid instance corpus. The generated TypeSpec schema is only
+comparison evidence, never a third authority.
+
 ## Overrides
 
 `from_env` keeps shared defaults. Pass `SidecarHooks` (closure bag) or a
@@ -62,7 +110,10 @@ mod env;
 #[path = "../generated/rust/runtime.rs"]
 mod env_runtime;
 
-use ores_otel_sidecar::{cli, runtime, SidecarConfig, SidecarHooks, SidecarIdentity};
+use ores_otel_sidecar::{
+    cli, runtime, SidecarConfig, SidecarHooks, SidecarIdentity,
+    DEFAULT_SIDECAR_CONFIG_PATH,
+};
 
 fn main() {
     let identity = SidecarIdentity::new(env::SERVICE, env::BIND);
@@ -79,6 +130,10 @@ fn main() {
             .allow_non_loopback(move |from_env| from_env && values.allow_non_loopback)
             .ready(|| true),
     );
+    let cfg = match cfg.with_optional_sidecar_file(DEFAULT_SIDECAR_CONFIG_PATH) {
+        Ok(cfg) => cfg,
+        Err(_) => runtime::exit_invalid_cli(identity),
+    };
     runtime::run_command(&cfg, command);
 }
 ```

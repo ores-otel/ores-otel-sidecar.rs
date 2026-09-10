@@ -1,0 +1,5 @@
+{
+  "schema": "ores.sidecar/config/v1",
+  "unexpected": true,
+  "sidecars": []
+}
