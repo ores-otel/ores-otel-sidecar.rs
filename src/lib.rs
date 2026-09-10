@@ -24,6 +24,7 @@ pub mod probe;
 pub mod receiver;
 pub mod runtime;
 pub mod runtime_values;
+pub mod startup_env;
 
 pub use cli::{CliError, CliResolution, SidecarCommand};
 pub use config::SidecarConfig;
@@ -42,6 +43,7 @@ pub use receiver::{
     DEFAULT_MAX_DATA_CHUNK_BYTES, DEFAULT_MAX_METADATA_LINE_BYTES,
 };
 pub use runtime_values::{is_sensitive_runtime_key, RuntimeValueUpdate, RuntimeValues};
+pub use startup_env::{preflight_startup, StartupEnv};
 
 #[cfg(test)]
 pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
