@@ -12,11 +12,13 @@ pub const DEFAULT_CONFIG_PATH: &str = ".cli-flags.toml";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SidecarCommand {
     Serve,
+    Preflight,
     ProbeHealthz,
     ProbeReadyz,
 }
 
-/// A validated command plus the environment snapshot after flags-2-env precedence.
+/// A validated command plus the immutable environment snapshot after defaults,
+/// dotenv, process environment, dotenv overrides, and argv precedence.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CliResolution {
     pub command: SidecarCommand,
@@ -26,6 +28,13 @@ pub struct CliResolution {
 impl CliResolution {
     pub fn value(&self, key: &str) -> Option<String> {
         self.values.get(key).cloned()
+    }
+
+    /// Final immutable environment snapshot. Defaults are materialized before
+    /// higher-precedence sources so startup validation sees exactly one value.
+    #[must_use]
+    pub fn values(&self) -> &BTreeMap<String, String> {
+        &self.values
     }
 }
 
@@ -84,14 +93,18 @@ where
 
     let command = match parsed.command.as_str() {
         "" => SidecarCommand::Serve,
+        "preflight" => SidecarCommand::Preflight,
         "probe" => SidecarCommand::ProbeHealthz,
         "probe-readyz" => SidecarCommand::ProbeReadyz,
         _ => return Err(CliError::InvalidArguments),
     };
 
-    // flags-2-env defines this exact precedence for structured consumers:
-    // dotenv < process environment < dotenv overrides < argv-only overrides.
+    // The fully-resolved flags map gives us schema defaults as the lowest
+    // layer. Reapplying the structured source channels then produces the
+    // canonical precedence:
+    // default < dotenv < process environment < dotenv overrides < argv.
     let mut values = BTreeMap::new();
+    values.extend(parsed.flags);
     values.extend(parsed.dotenv);
     values.extend(process_env);
     values.extend(parsed.dotenv_overrides);
@@ -113,10 +126,10 @@ mod tests {
     }
 
     #[test]
-    fn no_command_preserves_server_mode_and_process_environment() {
+    fn no_command_materializes_defaults_before_server_mode() {
         let resolved = resolve(
             &argv(&["ores-otel-sidecar"]),
-            [("ORES_OTEL_SIDECAR_BIND".into(), "127.0.0.1:19090".into())],
+            std::iter::empty(),
             &config_path(),
         )
         .expect("resolve server mode");
@@ -124,8 +137,40 @@ mod tests {
         assert_eq!(resolved.command, SidecarCommand::Serve);
         assert_eq!(
             resolved.value("ORES_OTEL_SIDECAR_BIND").as_deref(),
+            Some("127.0.0.1:9090")
+        );
+        assert_eq!(
+            resolved
+                .value("ORES_OTEL_SIDECAR_ALLOW_NON_LOOPBACK")
+                .as_deref(),
+            Some("false")
+        );
+    }
+
+    #[test]
+    fn process_environment_overrides_materialized_defaults() {
+        let resolved = resolve(
+            &argv(&["ores-otel-sidecar"]),
+            [("ORES_OTEL_SIDECAR_BIND".into(), "127.0.0.1:19090".into())],
+            &config_path(),
+        )
+        .expect("resolve server mode");
+
+        assert_eq!(
+            resolved.value("ORES_OTEL_SIDECAR_BIND").as_deref(),
             Some("127.0.0.1:19090")
         );
+    }
+
+    #[test]
+    fn preflight_command_is_first_class() {
+        let resolved = resolve(
+            &argv(&["ores-otel-sidecar", "preflight"]),
+            std::iter::empty(),
+            &config_path(),
+        )
+        .expect("resolve preflight mode");
+        assert_eq!(resolved.command, SidecarCommand::Preflight);
     }
 
     #[test]
@@ -158,6 +203,35 @@ mod tests {
         assert_eq!(
             resolved.value("ORES_OTEL_SIDECAR_BIND").as_deref(),
             Some("127.0.0.1:19191")
+        );
+    }
+
+    #[test]
+    fn argv_boolean_alias_is_normalized_but_raw_environment_is_not() {
+        let from_argv = resolve(
+            &argv(&["ores-otel-sidecar", "--allow-non-loopback=true"]),
+            std::iter::empty(),
+            &config_path(),
+        )
+        .expect("resolve argv bool");
+        assert_eq!(
+            from_argv
+                .value("ORES_OTEL_SIDECAR_ALLOW_NON_LOOPBACK")
+                .as_deref(),
+            Some("true")
+        );
+
+        let from_env = resolve(
+            &argv(&["ores-otel-sidecar"]),
+            [("ORES_OTEL_SIDECAR_ALLOW_NON_LOOPBACK".into(), "yes".into())],
+            &config_path(),
+        )
+        .expect("resolution does not itself reinterpret raw env");
+        assert_eq!(
+            from_env
+                .value("ORES_OTEL_SIDECAR_ALLOW_NON_LOOPBACK")
+                .as_deref(),
+            Some("yes")
         );
     }
 
