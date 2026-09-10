@@ -1,29 +1,36 @@
 #![forbid(unsafe_code)]
 
-#[allow(clippy::match_like_matches_macro)]
-#[path = "../generated/rust/runtime.rs"]
-mod env_runtime;
-
 use ores_otel_sidecar::{
-    cli, runtime, SidecarConfig, SidecarHooks, SidecarIdentity, DEFAULT_SIDECAR_CONFIG_PATH,
+    cli, preflight_startup, runtime, SidecarConfig, SidecarIdentity, DEFAULT_SIDECAR_CONFIG_PATH,
 };
 
 fn main() {
+    let identity = SidecarIdentity::ORES_OTEL;
     let invocation = match cli::resolve_process(runtime::DEFAULT_CLI_CONFIG_PATH) {
         Ok(invocation) => invocation,
-        Err(_error) => runtime::exit_invalid_cli(SidecarIdentity::ORES_OTEL),
+        Err(_error) => runtime::exit_invalid_cli(identity),
     };
     let command = invocation.command;
-    let values = env_runtime::load_from(|key| invocation.value(key));
-    let cfg = SidecarConfig::from_env_with(
-        SidecarIdentity::ORES_OTEL,
-        SidecarHooks::new()
-            .bind_raw(move |_| values.bind.clone())
-            .allow_non_loopback(move |_| values.allow_non_loopback),
-    );
+
+    // This is the mandatory boot gate. Nothing in the sidecar runtime is
+    // initialized until the final flags-2-env snapshot has passed canonical
+    // presence/type validation.
+    let startup = match preflight_startup(invocation.values()) {
+        Ok(startup) => startup,
+        Err(_diagnostics) => runtime::exit_invalid_config(identity),
+    };
+
+    let cfg = match SidecarConfig::from_bind(
+        identity,
+        &startup.bind,
+        startup.allow_non_loopback,
+    ) {
+        Ok(config) => config,
+        Err(_error) => runtime::exit_invalid_config(identity),
+    };
     let cfg = match cfg.with_optional_sidecar_file(DEFAULT_SIDECAR_CONFIG_PATH) {
         Ok(config) => config,
-        Err(_error) => runtime::exit_invalid_cli(SidecarIdentity::ORES_OTEL),
+        Err(_error) => runtime::exit_invalid_config(identity),
     };
     runtime::run_command(&cfg, command);
 }
