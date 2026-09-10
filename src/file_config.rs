@@ -8,6 +8,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::error::SidecarError;
+use crate::runtime_updates::valid_keyspace_segment;
 use crate::runtime_values::RuntimeValues;
 
 pub const DEFAULT_CONFIG_PATH: &str = ".ores-sidecar.toml";
@@ -15,6 +16,7 @@ pub const CONFIG_PROTOCOL: &str = "ores.sidecar/config/v1";
 pub const DEFAULT_STARTUP_CONFIG: &str = ".cli-flags.toml";
 pub const MAX_CONFIG_FILE_BYTES: usize = 256 * 1024;
 pub const MAX_SIDECARS: usize = 64;
+pub const MAX_RECONCILE_SECONDS: u32 = 180;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 pub enum RuntimeUpdateProvider {
@@ -39,6 +41,23 @@ pub struct RuntimeUpdatePolicy {
     pub mode: RuntimeUpdateMode,
     pub poll_seconds: u32,
     pub namespace: String,
+    pub cache: String,
+}
+
+impl RuntimeUpdatePolicy {
+    pub fn accepts_keyspace(&self, namespace: &str, cache: &str) -> bool {
+        self.namespace == namespace && self.cache == cache
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        matches!(
+            (self.provider, self.mode),
+            (
+                RuntimeUpdateProvider::OresRedisLruCache,
+                RuntimeUpdateMode::ReceiveOnly
+            )
+        )
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -206,12 +225,12 @@ fn validate_identity(id: &str) -> Result<(), SidecarError> {
 }
 
 fn validate_runtime_policy(policy: &RuntimeUpdatePolicy) -> Result<(), SidecarError> {
-    if !(60..=3600).contains(&policy.poll_seconds)
-        || policy.namespace.is_empty()
-        || policy.namespace.len() > 128
+    if !(60..=MAX_RECONCILE_SECONDS).contains(&policy.poll_seconds)
+        || !valid_keyspace_segment(&policy.namespace)
+        || !valid_keyspace_segment(&policy.cache)
     {
         return Err(SidecarError::InvalidConfig {
-            reason: "runtime update policy is outside bounded limits",
+            reason: "runtime update policy is outside Redis-LRU-compatible bounds",
         });
     }
 
@@ -242,6 +261,11 @@ mod tests {
         assert_eq!(resolved.definition.path.as_deref(), Some("."));
         assert_eq!(resolved.definition.startup_config(), ".cli-flags.toml");
         assert!(resolved.runtime_values.is_mutable("LOG_FILTER"));
+        assert!(resolved.definition.runtime_updates.is_enabled());
+        assert!(resolved
+            .definition
+            .runtime_updates
+            .accepts_keyspace("ores-otel-sidecar", "runtime-env"));
     }
 
     #[test]
@@ -251,9 +275,16 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(config.sidecars.len(), 2);
+        let first = config.resolve("first-sidecar").unwrap();
+        assert!(!first.definition.runtime_updates.is_enabled());
         let second = config.resolve("second-sidecar").unwrap();
         assert_eq!(second.definition.path.as_deref(), Some("../second"));
         assert!(second.runtime_values.is_mutable("FEATURE_FLAGS_JSON"));
+        assert!(second.definition.runtime_updates.is_enabled());
+        assert!(second
+            .definition
+            .runtime_updates
+            .accepts_keyspace("second-sidecar", "runtime-env"));
     }
 
     #[test]
@@ -270,6 +301,16 @@ mod tests {
             "../tests/fixtures/sidecar/forbidden-runtime-key.toml"
         ))
         .is_err());
+    }
+
+    #[test]
+    fn redis_keyspace_and_poll_limits_fail_closed() {
+        for input in [
+            include_str!("../tests/fixtures/sidecar/invalid-keyspace.toml"),
+            include_str!("../tests/fixtures/sidecar/poll-too-slow.toml"),
+        ] {
+            assert!(OresSidecarFile::parse(input).is_err());
+        }
     }
 
     #[test]

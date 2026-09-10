@@ -9,7 +9,8 @@ runtime_mutable = ["LOG_FILTER"]
 provider = "disabled"
 mode = "disabled"
 poll_seconds = 180
-namespace = "first/runtime"
+namespace = "first-sidecar"
+cache = "runtime-env"
 
 [[sidecars]]
 id = "second-sidecar"
@@ -25,4 +26,5 @@ value = "{}"
 provider = "ores-redis-lru-cache"
 mode = "receive-only"
 poll_seconds = 180
-namespace = "second/runtime"
+namespace = "second-sidecar"
+cache = "runtime-env"

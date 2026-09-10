@@ -6,7 +6,8 @@ id = "same-sidecar"
 provider = "disabled"
 mode = "disabled"
 poll_seconds = 180
-namespace = "one"
+namespace = "same-sidecar-one"
+cache = "runtime-env"
 
 [[sidecars]]
 id = "same-sidecar"
@@ -14,4 +15,5 @@ id = "same-sidecar"
 provider = "disabled"
 mode = "disabled"
 poll_seconds = 180
-namespace = "two"
+namespace = "same-sidecar-two"
+cache = "runtime-env"

@@ -1,11 +1,10 @@
 schema = "ores.sidecar/config/v1"
 
 [[sidecars]]
-id = "secret-sidecar"
-runtime_mutable = ["GITHUB_TOKEN"]
+id = "poll-too-slow"
 [sidecars.runtime_updates]
 provider = "ores-redis-lru-cache"
 mode = "receive-only"
-poll_seconds = 180
-namespace = "secret-sidecar"
+poll_seconds = 181
+namespace = "poll-too-slow"
 cache = "runtime-env"

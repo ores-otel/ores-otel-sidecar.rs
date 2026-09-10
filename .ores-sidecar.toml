@@ -10,4 +10,5 @@ runtime_mutable = ["LOG_FILTER", "REQUEST_TIMEOUT_MS"]
 provider = "ores-redis-lru-cache"
 mode = "receive-only"
 poll_seconds = 180
-namespace = "ores-otel-sidecar/runtime"
+namespace = "ores-otel-sidecar"
+cache = "runtime-env"

@@ -7,7 +7,8 @@
         "provider": "disabled",
         "mode": "disabled",
         "poll_seconds": 180,
-        "namespace": "first/runtime"
+        "namespace": "first-sidecar",
+        "cache": "runtime-env"
       }
     },
     {
@@ -17,7 +18,8 @@
         "provider": "ores-redis-lru-cache",
         "mode": "receive-only",
         "poll_seconds": 180,
-        "namespace": "second/runtime"
+        "namespace": "second-sidecar",
+        "cache": "runtime-env"
       },
       "runtime_mutable": ["FEATURE_FLAGS_JSON"],
       "values": [{"key": "FEATURE_FLAGS_JSON", "value": "{}"}]
