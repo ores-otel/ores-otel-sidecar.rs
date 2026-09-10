@@ -4,7 +4,9 @@
 #[path = "../generated/rust/runtime.rs"]
 mod env_runtime;
 
-use ores_otel_sidecar::{cli, runtime, SidecarConfig, SidecarHooks, SidecarIdentity};
+use ores_otel_sidecar::{
+    cli, runtime, SidecarConfig, SidecarHooks, SidecarIdentity, DEFAULT_SIDECAR_CONFIG_PATH,
+};
 
 fn main() {
     let invocation = match cli::resolve_process(runtime::DEFAULT_CLI_CONFIG_PATH) {
@@ -19,5 +21,9 @@ fn main() {
             .bind_raw(move |_| values.bind.clone())
             .allow_non_loopback(move |_| values.allow_non_loopback),
     );
+    let cfg = match cfg.with_optional_sidecar_file(DEFAULT_SIDECAR_CONFIG_PATH) {
+        Ok(config) => config,
+        Err(_error) => runtime::exit_invalid_cli(SidecarIdentity::ORES_OTEL),
+    };
     runtime::run_command(&cfg, command);
 }

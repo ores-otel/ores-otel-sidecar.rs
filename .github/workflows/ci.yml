@@ -13,6 +13,30 @@ jobs:
       - run: cargo test --all-targets --locked
       - run: cargo clippy --all-targets --locked -- -D warnings
 
+  sidecar-config-contract:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce peer TypeSpec and JSON Schema authorities with TJSV
+        uses: ORESoftware/typespec-json-schema-validator@7241f8e52dcc4518c72f0fdb5152d6cf66c86656
+        with:
+          typespec: contracts/sidecar/main.tsp
+          schema: contracts/sidecar/authored.schema.json
+          instances: contracts/sidecar/instances
+          report: contracts/sidecar/tjsv-report.json
+          sarif: ''
+          quiet: 'false'
+      - name: Retain TJSV evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidecar-config-tjsv
+          path: contracts/sidecar/tjsv-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
   browsers:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,3 @@
+schema = "ores.sidecar/config/v1"
+[[sidecars]
+id = "broken"

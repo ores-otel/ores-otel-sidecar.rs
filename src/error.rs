@@ -8,6 +8,10 @@ pub enum SidecarError {
     InvalidBind { value: String },
     UnresolvedBind { value: String },
     NonLoopbackBind { value: String },
+    InvalidConfig { reason: &'static str },
+    MissingSidecar { service: String },
+    RuntimeUpdateRejected { key: String },
+    RuntimeStateUnavailable,
     Io(io::Error),
 }
 
@@ -21,6 +25,14 @@ impl Display for SidecarError {
                 "refusing non-loopback bind {value:?}; set {}=1 to override",
                 crate::identity::ALLOW_NON_LOOPBACK
             ),
+            Self::InvalidConfig { reason } => write!(f, "invalid sidecar configuration: {reason}"),
+            Self::MissingSidecar { service } => {
+                write!(f, "sidecar configuration has no entry for {service:?}")
+            }
+            Self::RuntimeUpdateRejected { key } => {
+                write!(f, "runtime update rejected for key {key:?}")
+            }
+            Self::RuntimeStateUnavailable => f.write_str("runtime sidecar state is unavailable"),
             Self::Io(err) => write!(f, "{err}"),
         }
     }

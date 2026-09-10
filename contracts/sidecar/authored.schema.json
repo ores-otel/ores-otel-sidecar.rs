@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ores.sidecar.config.schema.json",
+  "$defs": {
+    "RuntimeUpdateProvider": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "RuntimeUpdateProvider",
+      "type": "string",
+      "enum": ["disabled", "ores-redis-lru-cache"]
+    },
+    "RuntimeUpdateMode": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "RuntimeUpdateMode",
+      "type": "string",
+      "enum": ["disabled", "receive-only"]
+    },
+    "RuntimeUpdatePolicy": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "RuntimeUpdatePolicy",
+      "type": "object",
+      "properties": {
+        "provider": { "$ref": "RuntimeUpdateProvider" },
+        "mode": { "$ref": "RuntimeUpdateMode" },
+        "poll_seconds": { "type": "integer", "minimum": 60, "maximum": 3600 },
+        "namespace": { "type": "string" }
+      },
+      "required": ["provider", "mode", "poll_seconds", "namespace"],
+      "unevaluatedProperties": false
+    },
+    "RuntimeValueDefinition": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "RuntimeValueDefinition",
+      "type": "object",
+      "properties": {
+        "key": { "type": "string" },
+        "value": { "type": "string" }
+      },
+      "required": ["key", "value"],
+      "unevaluatedProperties": false
+    },
+    "SidecarDefinition": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "SidecarDefinition",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "path": { "type": "string" },
+        "startup_config": { "type": "string" },
+        "runtime_updates": { "$ref": "RuntimeUpdatePolicy" },
+        "runtime_mutable": { "type": "array", "items": { "type": "string" } },
+        "values": { "type": "array", "items": { "$ref": "RuntimeValueDefinition" } }
+      },
+      "required": ["id", "runtime_updates"],
+      "unevaluatedProperties": false
+    },
+    "OresSidecarFile": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "OresSidecarFile",
+      "type": "object",
+      "properties": {
+        "schema": { "type": "string", "const": "ores.sidecar/config/v1" },
+        "sidecars": { "type": "array", "items": { "$ref": "SidecarDefinition" } }
+      },
+      "required": ["schema", "sidecars"],
+      "unevaluatedProperties": false
+    }
+  }
+}

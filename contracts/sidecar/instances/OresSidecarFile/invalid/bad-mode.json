@@ -1,0 +1,14 @@
+{
+  "schema": "ores.sidecar/config/v1",
+  "sidecars": [
+    {
+      "id": "bad",
+      "runtime_updates": {
+        "provider": "ores-redis-lru-cache",
+        "mode": "write-through",
+        "poll_seconds": 180,
+        "namespace": "bad/runtime"
+      }
+    }
+  ]
+}

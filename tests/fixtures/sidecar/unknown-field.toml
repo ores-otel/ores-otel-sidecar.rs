@@ -1,0 +1,10 @@
+schema = "ores.sidecar/config/v1"
+unknown = true
+
+[[sidecars]]
+id = "unknown-field-sidecar"
+[sidecars.runtime_updates]
+provider = "disabled"
+mode = "disabled"
+poll_seconds = 180
+namespace = "unknown/runtime"

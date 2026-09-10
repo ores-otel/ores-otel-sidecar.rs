@@ -1,0 +1,26 @@
+{
+  "schema": "ores.sidecar/config/v1",
+  "sidecars": [
+    {
+      "id": "first-sidecar",
+      "runtime_updates": {
+        "provider": "disabled",
+        "mode": "disabled",
+        "poll_seconds": 180,
+        "namespace": "first/runtime"
+      }
+    },
+    {
+      "id": "second-sidecar",
+      "path": "../second",
+      "runtime_updates": {
+        "provider": "ores-redis-lru-cache",
+        "mode": "receive-only",
+        "poll_seconds": 180,
+        "namespace": "second/runtime"
+      },
+      "runtime_mutable": ["FEATURE_FLAGS_JSON"],
+      "values": [{"key": "FEATURE_FLAGS_JSON", "value": "{}"}]
+    }
+  ]
+}
