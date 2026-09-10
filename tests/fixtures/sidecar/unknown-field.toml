@@ -7,4 +7,5 @@ id = "unknown-field-sidecar"
 provider = "disabled"
 mode = "disabled"
 poll_seconds = 180
-namespace = "unknown/runtime"
+namespace = "unknown-field-sidecar"
+cache = "runtime-env"

@@ -2,13 +2,12 @@
   "schema": "ores.sidecar/config/v1",
   "sidecars": [
     {
-      "id": "bad",
+      "id": "missing-cache",
       "runtime_updates": {
         "provider": "ores-redis-lru-cache",
-        "mode": "write-through",
+        "mode": "receive-only",
         "poll_seconds": 180,
-        "namespace": "bad",
-        "cache": "runtime-env"
+        "namespace": "missing-cache"
       }
     }
   ]

@@ -2,17 +2,14 @@
   "schema": "ores.sidecar/config/v1",
   "sidecars": [
     {
-      "id": "ores-otel-sidecar",
-      "path": ".",
-      "startup_config": ".cli-flags.toml",
+      "id": "invalid-keyspace",
       "runtime_updates": {
         "provider": "ores-redis-lru-cache",
         "mode": "receive-only",
         "poll_seconds": 180,
-        "namespace": "ores-otel-sidecar",
+        "namespace": "invalid/keyspace",
         "cache": "runtime-env"
-      },
-      "runtime_mutable": ["LOG_FILTER", "REQUEST_TIMEOUT_MS"]
+      }
     }
   ]
 }

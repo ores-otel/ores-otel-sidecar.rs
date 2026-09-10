@@ -2,12 +2,12 @@
   "schema": "ores.sidecar/config/v1",
   "sidecars": [
     {
-      "id": "bad",
+      "id": "poll-too-slow",
       "runtime_updates": {
         "provider": "ores-redis-lru-cache",
-        "mode": "write-through",
-        "poll_seconds": 180,
-        "namespace": "bad",
+        "mode": "receive-only",
+        "poll_seconds": 181,
+        "namespace": "poll-too-slow",
         "cache": "runtime-env"
       }
     }

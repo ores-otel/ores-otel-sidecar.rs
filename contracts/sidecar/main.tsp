@@ -20,9 +20,16 @@ model RuntimeUpdatePolicy {
   provider: RuntimeUpdateProvider;
   mode: RuntimeUpdateMode;
   @minValue(60)
-  @maxValue(3600)
+  @maxValue(180)
   poll_seconds: int32;
+  @minLength(1)
+  @maxLength(64)
+  @pattern("^[A-Za-z0-9._-]+$")
   `namespace`: string;
+  @minLength(1)
+  @maxLength(64)
+  @pattern("^[A-Za-z0-9._-]+$")
+  cache: string;
 }
 
 @id("RuntimeValueDefinition")

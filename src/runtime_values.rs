@@ -9,7 +9,8 @@ pub const MAX_RUNTIME_KEYS: usize = 64;
 pub const MAX_RUNTIME_KEY_BYTES: usize = 128;
 pub const MAX_RUNTIME_VALUE_BYTES: usize = 16 * 1024;
 
-/// One atomic runtime update. `None` removes the current value.
+/// One atomic runtime override. `None` removes the backend override and restores
+/// the immutable configured baseline value, when one exists.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuntimeValueUpdate {
     pub key: String,
@@ -33,18 +34,21 @@ impl RuntimeValueUpdate {
 }
 
 /// Shared, cloneable runtime-value handle intended for adapters such as
-/// `ores-redis-lru-cache`. It never mutates the process environment.
+/// `ores-redis-lru-cache`. The baseline is immutable; backend updates live in a
+/// separate override map and never mutate the process environment.
 #[derive(Clone, Debug)]
 pub struct RuntimeValues {
     mutable: Arc<BTreeSet<String>>,
-    values: Arc<RwLock<BTreeMap<String, String>>>,
+    baseline: Arc<BTreeMap<String, String>>,
+    overrides: Arc<RwLock<BTreeMap<String, String>>>,
 }
 
 impl Default for RuntimeValues {
     fn default() -> Self {
         Self {
             mutable: Arc::new(BTreeSet::new()),
-            values: Arc::new(RwLock::new(BTreeMap::new())),
+            baseline: Arc::new(BTreeMap::new()),
+            overrides: Arc::new(RwLock::new(BTreeMap::new())),
         }
     }
 }
@@ -64,19 +68,20 @@ impl RuntimeValues {
             }
         }
 
-        let mut values = BTreeMap::new();
+        let mut baseline = BTreeMap::new();
         for (key, value) in initial {
             validate_update(&allowed, &key, Some(&value))?;
-            if values.len() >= MAX_RUNTIME_KEYS || values.insert(key, value).is_some() {
+            if baseline.len() >= MAX_RUNTIME_KEYS || baseline.insert(key, value).is_some() {
                 return Err(SidecarError::InvalidConfig {
-                    reason: "runtime values must be unique and bounded",
+                    reason: "runtime baseline values must be unique and bounded",
                 });
             }
         }
 
         Ok(Self {
             mutable: Arc::new(allowed),
-            values: Arc::new(RwLock::new(values)),
+            baseline: Arc::new(baseline),
+            overrides: Arc::new(RwLock::new(BTreeMap::new())),
         })
     }
 
@@ -84,24 +89,32 @@ impl RuntimeValues {
         self.mutable.contains(key)
     }
 
+    pub fn mutable_keys(&self) -> BTreeSet<String> {
+        self.mutable.as_ref().clone()
+    }
+
     pub fn get(&self, key: &str) -> Result<Option<String>, SidecarError> {
-        let values = self
-            .values
+        let overrides = self
+            .overrides
             .read()
             .map_err(|_| SidecarError::RuntimeStateUnavailable)?;
-        Ok(values.get(key).cloned())
+        Ok(overrides
+            .get(key)
+            .cloned()
+            .or_else(|| self.baseline.get(key).cloned()))
     }
 
     pub fn snapshot(&self) -> Result<BTreeMap<String, String>, SidecarError> {
-        self.values
+        let overrides = self
+            .overrides
             .read()
-            .map(|values| values.clone())
-            .map_err(|_| SidecarError::RuntimeStateUnavailable)
+            .map_err(|_| SidecarError::RuntimeStateUnavailable)?;
+        let mut merged = self.baseline.as_ref().clone();
+        merged.extend(overrides.iter().map(|(key, value)| (key.clone(), value.clone())));
+        Ok(merged)
     }
 
-    /// Apply a bounded patch atomically. Every key/value is validated before the
-    /// write lock is taken, so a rejected update cannot partially mutate state.
-    pub fn apply_patch(&self, updates: &[RuntimeValueUpdate]) -> Result<(), SidecarError> {
+    pub(crate) fn validate_patch(&self, updates: &[RuntimeValueUpdate]) -> Result<(), SidecarError> {
         if updates.len() > MAX_RUNTIME_KEYS {
             return Err(SidecarError::InvalidConfig {
                 reason: "runtime patch exceeds the bounded key count",
@@ -117,21 +130,51 @@ impl RuntimeValues {
             }
             validate_update(&self.mutable, &update.key, update.value.as_deref())?;
         }
+        Ok(())
+    }
 
-        let mut values = self
-            .values
+    /// Apply a bounded patch atomically. Every key/value is validated before the
+    /// write lock is taken, so a rejected update cannot partially mutate state.
+    pub fn apply_patch(&self, updates: &[RuntimeValueUpdate]) -> Result<(), SidecarError> {
+        self.validate_patch(updates)?;
+        let mut overrides = self
+            .overrides
             .write()
             .map_err(|_| SidecarError::RuntimeStateUnavailable)?;
         for update in updates {
             match &update.value {
                 Some(value) => {
-                    values.insert(update.key.clone(), value.clone());
+                    overrides.insert(update.key.clone(), value.clone());
                 }
                 None => {
-                    values.remove(&update.key);
+                    overrides.remove(&update.key);
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Atomically replace the entire backend override map. This is the snapshot
+    /// and `replace` primitive, so replacing 64 old keys with 64 new keys stays
+    /// within the configured 64-key state bound instead of being miscounted as
+    /// a 128-operation patch.
+    pub(crate) fn replace_overrides(
+        &self,
+        next: &BTreeMap<String, String>,
+    ) -> Result<(), SidecarError> {
+        if next.len() > MAX_RUNTIME_KEYS {
+            return Err(SidecarError::InvalidConfig {
+                reason: "runtime override set exceeds the bounded key count",
+            });
+        }
+        for (key, value) in next {
+            validate_update(&self.mutable, key, Some(value))?;
+        }
+        let mut overrides = self
+            .overrides
+            .write()
+            .map_err(|_| SidecarError::RuntimeStateUnavailable)?;
+        *overrides = next.clone();
         Ok(())
     }
 }
@@ -222,6 +265,56 @@ mod tests {
             ])
             .is_err());
         assert_eq!(values.get("LOG_FILTER").unwrap().as_deref(), Some("debug"));
+    }
+
+    #[test]
+    fn removing_backend_override_restores_baseline() {
+        let values = RuntimeValues::new(
+            ["LOG_FILTER".to_owned()],
+            [("LOG_FILTER".to_owned(), "info".to_owned())],
+        )
+        .unwrap();
+        values
+            .apply_patch(&[RuntimeValueUpdate::set("LOG_FILTER", "debug")])
+            .unwrap();
+        assert_eq!(values.get("LOG_FILTER").unwrap().as_deref(), Some("debug"));
+        values
+            .apply_patch(&[RuntimeValueUpdate::remove("LOG_FILTER")])
+            .unwrap();
+        assert_eq!(values.get("LOG_FILTER").unwrap().as_deref(), Some("info"));
+    }
+
+    #[test]
+    fn full_override_replacement_is_bounded_by_state_not_operation_count() {
+        let keys = (0..MAX_RUNTIME_KEYS)
+            .map(|index| format!("FEATURE_{index}"))
+            .collect::<Vec<_>>();
+        let values = RuntimeValues::new(keys.clone(), std::iter::empty::<(String, String)>()).unwrap();
+        let first = keys
+            .iter()
+            .map(|key| (key.clone(), "one".to_owned()))
+            .collect::<BTreeMap<_, _>>();
+        values.replace_overrides(&first).unwrap();
+        let second = keys
+            .iter()
+            .map(|key| (key.clone(), "two".to_owned()))
+            .collect::<BTreeMap<_, _>>();
+        values.replace_overrides(&second).unwrap();
+        assert_eq!(values.get("FEATURE_63").unwrap().as_deref(), Some("two"));
+    }
+
+    #[test]
+    fn clones_share_overrides_but_not_process_environment() {
+        let values = RuntimeValues::new(
+            ["LOG_FILTER".to_owned()],
+            std::iter::empty::<(String, String)>(),
+        )
+        .unwrap();
+        let clone = values.clone();
+        values
+            .apply_patch(&[RuntimeValueUpdate::set("LOG_FILTER", "trace")])
+            .unwrap();
+        assert_eq!(clone.get("LOG_FILTER").unwrap().as_deref(), Some("trace"));
     }
 
     #[test]

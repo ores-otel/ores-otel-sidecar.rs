@@ -21,10 +21,11 @@
       "properties": {
         "provider": { "$ref": "RuntimeUpdateProvider" },
         "mode": { "$ref": "RuntimeUpdateMode" },
-        "poll_seconds": { "type": "integer", "minimum": 60, "maximum": 3600 },
-        "namespace": { "type": "string" }
+        "poll_seconds": { "type": "integer", "minimum": 60, "maximum": 180 },
+        "namespace": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._-]+$" },
+        "cache": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._-]+$" }
       },
-      "required": ["provider", "mode", "poll_seconds", "namespace"],
+      "required": ["provider", "mode", "poll_seconds", "namespace", "cache"],
       "unevaluatedProperties": false
     },
     "RuntimeValueDefinition": {

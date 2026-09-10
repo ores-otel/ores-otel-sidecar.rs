@@ -11,6 +11,7 @@ use crate::file_config::{OresSidecarFile, RuntimeUpdatePolicy};
 use crate::hooks::{DefaultOverrides, SidecarOverrides};
 use crate::identity::SidecarIdentity;
 use crate::log::{Operation, Outcome, Severity};
+use crate::runtime_updates::RuntimeUpdateController;
 use crate::runtime_values::RuntimeValues;
 
 #[derive(Clone)]
@@ -19,6 +20,7 @@ pub struct SidecarConfig {
     pub listen: SocketAddr,
     overrides: Arc<dyn SidecarOverrides>,
     runtime_values: RuntimeValues,
+    runtime_controller: RuntimeUpdateController,
     runtime_updates: Option<RuntimeUpdatePolicy>,
 }
 
@@ -37,9 +39,6 @@ impl SidecarConfig {
         Self::from_env_with(identity, DefaultOverrides)
     }
 
-    /// Build config from env, applying product overrides for bind / loopback policy.
-    ///
-    /// `runtime::run` then uses the same overrides as the default [`crate::ProductProbe`].
     pub fn from_env_with(
         identity: SidecarIdentity,
         overrides: impl SidecarOverrides + 'static,
@@ -88,23 +87,21 @@ impl SidecarConfig {
         allow_non_loopback: bool,
         overrides: impl SidecarOverrides + 'static,
     ) -> Result<Self, SidecarError> {
+        let runtime_values = RuntimeValues::default();
         Ok(Self {
             listen: parse_bind(raw, allow_non_loopback)?,
             identity,
             overrides: Arc::new(overrides),
-            runtime_values: RuntimeValues::default(),
+            runtime_controller: RuntimeUpdateController::new(runtime_values.clone()),
+            runtime_values,
             runtime_updates: None,
         })
     }
 
-    /// Attach the entry matching this sidecar identity from one single- or
-    /// multi-sidecar `.ores-sidecar.toml` file.
     pub fn with_sidecar_file(self, path: impl AsRef<Path>) -> Result<Self, SidecarError> {
         self.with_loaded_sidecar_file(OresSidecarFile::load(path)?)
     }
 
-    /// Attach the repository-root sidecar file when present. A present but
-    /// malformed file still fails closed; only `NotFound` is treated as absent.
     pub fn with_optional_sidecar_file(
         self,
         path: impl AsRef<Path>,
@@ -119,6 +116,10 @@ impl SidecarConfig {
         self.runtime_values.clone()
     }
 
+    pub fn runtime_update_controller(&self) -> RuntimeUpdateController {
+        self.runtime_controller.clone()
+    }
+
     pub fn runtime_update_policy(&self) -> Option<&RuntimeUpdatePolicy> {
         self.runtime_updates.as_ref()
     }
@@ -129,8 +130,18 @@ impl SidecarConfig {
 
     fn with_loaded_sidecar_file(mut self, file: OresSidecarFile) -> Result<Self, SidecarError> {
         let resolved = file.resolve(self.identity.service)?;
-        self.runtime_updates = Some(resolved.definition.runtime_updates);
+        let policy = resolved.definition.runtime_updates;
         self.runtime_values = resolved.runtime_values;
+        self.runtime_controller = if policy.is_enabled() {
+            RuntimeUpdateController::for_target(
+                self.runtime_values.clone(),
+                policy.namespace.clone(),
+                policy.cache.clone(),
+            )?
+        } else {
+            RuntimeUpdateController::new(self.runtime_values.clone())
+        };
+        self.runtime_updates = Some(policy);
         Ok(self)
     }
 }
@@ -141,6 +152,7 @@ mod tests {
     use crate::file_config::DEFAULT_CONFIG_PATH;
     use crate::hooks::SidecarHooks;
     use crate::probe::ProductProbe;
+    use crate::{RuntimeUpdateBatch, RuntimeUpdateOperation, RuntimeUpdateOutcome};
 
     #[test]
     fn default_bind_is_loopback() {
@@ -155,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn root_sidecar_file_attaches_runtime_policy() {
+    fn root_sidecar_file_attaches_runtime_policy_and_controller() {
         let path = format!("{}/{}", env!("CARGO_MANIFEST_DIR"), DEFAULT_CONFIG_PATH);
         let cfg = SidecarConfig::from_bind(
             SidecarIdentity::ORES_OTEL,
@@ -166,7 +178,39 @@ mod tests {
         .with_sidecar_file(path)
         .unwrap();
         assert!(cfg.runtime_values().is_mutable("LOG_FILTER"));
-        assert_eq!(cfg.runtime_update_policy().unwrap().poll_seconds, 180);
+        let policy = cfg.runtime_update_policy().unwrap();
+        assert_eq!(policy.poll_seconds, 180);
+        assert!(policy.accepts_keyspace("ores-otel-sidecar", "runtime-env"));
+
+        let controller = cfg.runtime_update_controller();
+        let mut event = RuntimeUpdateBatch::new(
+            "ores-otel-sidecar",
+            "runtime-env",
+            1,
+            RuntimeUpdateOperation::Upsert,
+        );
+        event.entries.insert("LOG_FILTER".into(), "debug".into());
+        assert_eq!(
+            controller.apply_batch(event).unwrap(),
+            RuntimeUpdateOutcome::Applied { revision: 1 }
+        );
+        assert_eq!(
+            cfg.runtime_values().get("LOG_FILTER").unwrap().as_deref(),
+            Some("debug")
+        );
+    }
+
+    #[test]
+    fn disabled_policy_keeps_controller_closed() {
+        let file = OresSidecarFile::parse(include_str!("../tests/fixtures/sidecar/multi.toml")).unwrap();
+        let mut cfg = SidecarConfig::from_bind(
+            SidecarIdentity::new("first-sidecar", "FIRST_SIDECAR_BIND"),
+            "127.0.0.1:9090",
+            false,
+        )
+        .unwrap();
+        cfg = cfg.with_loaded_sidecar_file(file).unwrap();
+        assert!(cfg.runtime_update_controller().target().is_none());
     }
 
     #[test]
