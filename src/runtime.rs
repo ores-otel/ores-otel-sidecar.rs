@@ -27,6 +27,7 @@ pub fn run(config: &SidecarConfig) {
 /// Execute an already validated flags-2-env command.
 pub fn run_command(config: &SidecarConfig, command: SidecarCommand) {
     match command {
+        SidecarCommand::Preflight => {}
         SidecarCommand::ProbeHealthz => exit_probe(config, "/healthz"),
         SidecarCommand::ProbeReadyz => exit_probe(config, "/readyz"),
         SidecarCommand::Serve => {
@@ -46,6 +47,15 @@ pub fn run_command(config: &SidecarConfig, command: SidecarCommand) {
 
 /// Emit the stable, payload-free diagnostic used for invalid CLI input.
 pub fn exit_invalid_cli(identity: SidecarIdentity) -> ! {
+    exit_rejected(identity, 2)
+}
+
+/// Emit the stable, payload-free diagnostic used for invalid startup config/env.
+pub fn exit_invalid_config(identity: SidecarIdentity) -> ! {
+    exit_rejected(identity, 1)
+}
+
+fn exit_rejected(identity: SidecarIdentity, code: i32) -> ! {
     log::write_stderr(
         identity.service,
         Severity::Fatal,
@@ -53,7 +63,7 @@ pub fn exit_invalid_cli(identity: SidecarIdentity) -> ! {
         Outcome::Rejected,
         false,
     );
-    std::process::exit(2);
+    std::process::exit(code);
 }
 
 fn exit_probe(config: &SidecarConfig, path: &str) -> ! {

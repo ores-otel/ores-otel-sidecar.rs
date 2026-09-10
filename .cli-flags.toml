@@ -1,14 +1,10 @@
 # flags-2-env surface for `ores-otel-sidecar`
-[identity]
-service = "ores-otel-sidecar"
-type_name = "SidecarEnv"
-
 [help]
 url = "https://github.com/ores-otel/ores-otel-sidecar.rs"
 columns = ["options", "env", "type", "default", "description"]
 
 [env]
-load = false
+files = []
 
 [parse]
 allow_unknown = false
@@ -16,17 +12,23 @@ command_env = "ORES_OTEL_SIDECAR_COMMAND"
 
 [flags.bind]
 env = "ORES_OTEL_SIDECAR_BIND"
-long = "bind"
+aliases = ["bind"]
 type = "string"
 default = "127.0.0.1:9090"
 help = "HTTP listen address for /healthz /readyz /metrics."
 
 [flags.allow-non-loopback]
 env = "ORES_OTEL_SIDECAR_ALLOW_NON_LOOPBACK"
-long = "allow-non-loopback"
+aliases = ["allow-non-loopback"]
 type = "bool"
 default = false
+true_aliases = ["t", "1", "yes"]
+false_aliases = ["f", "0", "no"]
 help = "Allow a non-loopback unicast bind address."
+
+[commands.preflight]
+env = "ORES_OTEL_SIDECAR_COMMAND_PREFLIGHT"
+help = "Validate startup configuration and environment without starting listeners."
 
 [commands.probe]
 aliases = ["probe-healthz"]

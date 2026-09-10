@@ -10,7 +10,7 @@ The process **does not read stdin** and **does not use stdout as a protocol**.
 |---|---|
 | HTTP on the bind address (loopback by default) | `/healthz`, `/readyz`, `/metrics` |
 | stderr JSON | closed, payload-free failure diagnostics for an independent platform collector |
-| `ORES_OTEL_SIDECAR_ALLOW_NON_LOOPBACK=1` | required to bind a non-loopback unicast address; `0.0.0.0`/`::` stay rejected |
+| `ORES_OTEL_SIDECAR_ALLOW_NON_LOOPBACK=true` | required to bind a non-loopback unicast address; `0.0.0.0`/`::` stay rejected |
 
 Product binaries inherit this crate:
 
@@ -23,6 +23,30 @@ Product binaries inherit this crate:
 ores-otel-sidecar = { git = "https://github.com/ores-otel/ores-otel-sidecar.rs", rev = "<pinned-commit>" }
 ```
 
+## Deterministic startup preflight
+
+The executable does not enter application runtime code until its final startup
+environment has passed one deterministic typed gate. `flags-2-env` first
+materializes declared defaults and resolves source precedence. The canonical
+preflight then validates the resulting immutable map using shared lexical rules
+rather than Rust/Go/Dart/JavaScript parser conveniences.
+
+For environment values, booleans are exactly `true` or `false`; integers are
+canonical signed base-10 i64 values; doubles use finite JSON-number syntax; JSON
+must parse strictly; array and map contracts require the corresponding JSON root
+type. Empty strings are accepted only when the declaring domain explicitly
+allows them. Diagnostics use stable `ENV_MISSING`, `ENV_PARSE`, or
+`ENV_CONTRACT` codes and never contain the rejected runtime value.
+
+CLI aliases remain ergonomic because flags-2-env canonicalizes argv first. For
+example a schema may accept `--flag=yes` and materialize `true`; a raw process
+environment value `FLAG=yes` is not canonical and fails preflight.
+
+`ores-otel-sidecar preflight` executes the same startup validation and
+`.ores-sidecar.toml` admission as normal boot, but exits successfully without
+opening a listener. Normal server boot runs that gate unconditionally before
+constructing `SidecarConfig`.
+
 ## CLI authority and probe modes
 
 `.cli-flags.toml` is the sole command and flag authority. The executable uses
@@ -34,17 +58,18 @@ Supported process modes are:
 
 | Invocation | Result |
 |---|---|
-| no command | serve loopback HTTP |
-| `probe` or `probe-healthz` | one bounded `/healthz` request, then exit |
-| `probe-readyz` | one bounded `/readyz` request, then exit |
+| no command | validate startup config, then serve loopback HTTP |
+| `preflight` | validate startup config and exit without listening |
+| `probe` or `probe-healthz` | validate startup config, make one bounded `/healthz` request, then exit |
+| `probe-readyz` | validate startup config, make one bounded `/readyz` request, then exit |
 | unknown option, command, or operand | payload-free diagnostic and exit 2 |
 
 Global flags continue to work after a command. For example,
 `probe --bind=127.0.0.1:19090` probes that exact loopback listener. Structured
-precedence is flags-2-env's canonical order: declared dotenv values, process
-environment, dotenv overrides, then argv-provided flags. This repository turns
-dotenv loading off, so normal deployments reduce that to process environment
-then argv.
+precedence is flags-2-env's canonical order: schema defaults, declared dotenv
+values, process environment, dotenv overrides, then argv-provided flags. This
+repository turns dotenv loading off, so normal deployments reduce that to
+schema defaults, process environment, then argv.
 
 ## `.ores-sidecar.toml` and runtime values
 
@@ -96,23 +121,18 @@ comparison evidence, never a third authority.
 
 ## Overrides
 
-`from_env` keeps shared defaults. Pass `SidecarHooks` (closure bag) or a
-`SidecarOverrides` impl when a product needs to rewrite bind, refuse a public
-listen, or supply `/readyz` / extra `/healthz` payload. Unset hooks fall through.
-
-New product binaries should resolve flags-2-env before constructing
-`SidecarConfig`, so argv-derived values and environment values enter one typed
-snapshot:
+`from_env` remains available for compatibility, but new product binaries should
+resolve `.cli-flags.toml`, call `preflight_startup_with_keys`, and construct
+`SidecarConfig` from the resulting typed immutable snapshot. This prevents a
+second ad-hoc environment parser from appearing after preflight.
 
 ```rust
 #[path = "../generated/rust/env.rs"]
 mod env;
-#[path = "../generated/rust/runtime.rs"]
-mod env_runtime;
 
 use ores_otel_sidecar::{
-    cli, runtime, SidecarConfig, SidecarHooks, SidecarIdentity,
-    DEFAULT_SIDECAR_CONFIG_PATH,
+    cli, preflight_startup_with_keys, runtime, SidecarConfig, SidecarHooks,
+    SidecarIdentity, DEFAULT_SIDECAR_CONFIG_PATH,
 };
 
 fn main() {
@@ -122,24 +142,33 @@ fn main() {
         Err(_) => runtime::exit_invalid_cli(identity),
     };
     let command = invocation.command;
-    let values = env_runtime::load_from(|key| invocation.value(key));
-    let cfg = SidecarConfig::from_env_with(
+    let startup = match preflight_startup_with_keys(
+        invocation.values(),
+        env::BIND,
+        env::ALLOW_NON_LOOPBACK,
+    ) {
+        Ok(startup) => startup,
+        Err(_) => runtime::exit_invalid_config(identity),
+    };
+    let cfg = match SidecarConfig::from_bind_with(
         identity,
-        SidecarHooks::new()
-            .bind_raw(move |_| values.bind.clone())
-            .allow_non_loopback(move |from_env| from_env && values.allow_non_loopback)
-            .ready(|| true),
-    );
+        &startup.bind,
+        startup.allow_non_loopback,
+        SidecarHooks::new().ready(|| true),
+    ) {
+        Ok(cfg) => cfg,
+        Err(_) => runtime::exit_invalid_config(identity),
+    };
     let cfg = match cfg.with_optional_sidecar_file(DEFAULT_SIDECAR_CONFIG_PATH) {
         Ok(cfg) => cfg,
-        Err(_) => runtime::exit_invalid_cli(identity),
+        Err(_) => runtime::exit_invalid_config(identity),
     };
     runtime::run_command(&cfg, command);
 }
 ```
 
 Named policy types work the same way: implement `SidecarOverrides` (and
-`ProductProbe`) and pass that value to `from_env_with`. `run_command` uses those
+`ProductProbe`) and pass that value to `from_bind_with`. `run_command` uses those
 overrides as the probe; tests can still call `run_with_probe` with a different
 one. `runtime::run` remains a compatibility dispatcher for binaries that have
 already constructed configuration, but it cannot retroactively apply argv
@@ -165,11 +194,13 @@ the sidecar cloud-SDK-free and use workload-identity-backed platform agents for
 cloud delivery.
 
 The CI matrix builds the actual read-only distroless image, starts it without a
-shell, and runs `/ores-otel-sidecar probe`, `probe-healthz`, and `probe-readyz`
-through `docker exec`, matching kubelet's executable contract.
+shell, runs `preflight`, and runs `/ores-otel-sidecar probe`, `probe-healthz`,
+and `probe-readyz` through `docker exec`, matching kubelet's executable
+contract.
 
 Browser automation contracts (Playwright, Puppeteer, Selenium) live in
 [`ores-otel-test/ores-otel-sidecar-contract-tests`](https://github.com/ores-otel-test/ores-otel-sidecar-contract-tests).
 
-Env keys are centralized in `.cli-flags.toml` and generated by `f2e generate`
-into `generated/{rust,dart,typescript,gleam}`.
+Env keys remain centralized in `.cli-flags.toml`; generated language artifacts
+are evidence/SDK conveniences, while executable startup uses the canonical
+flags-2-env immutable-map preflight rather than reparsing generated defaults.
