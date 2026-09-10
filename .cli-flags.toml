@@ -26,7 +26,13 @@ env = "ORES_OTEL_SIDECAR_ALLOW_NON_LOOPBACK"
 long = "allow-non-loopback"
 type = "bool"
 default = false
+true_aliases = ["t", "1", "yes"]
+false_aliases = ["f", "0", "no"]
 help = "Allow a non-loopback unicast bind address."
+
+[commands.preflight]
+env = "ORES_OTEL_SIDECAR_COMMAND_PREFLIGHT"
+help = "Validate startup configuration and environment without starting listeners."
 
 [commands.probe]
 aliases = ["probe-healthz"]
