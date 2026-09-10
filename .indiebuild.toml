@@ -1,0 +1,18 @@
+schema_version = "gha-indie-worker.indiebuild/v1"
+repository_role = "server"
+default_target = "server"
+
+[[targets]]
+name = "server"
+role = "server"
+path = "."
+profile = "rust-verify"
+platform = "linux"
+artifacts = []
+cache_paths = []
+env = ["RUST_LOG"]
+secret_env = []
+allow_network = true
+allow_push = false
+allow_deploy = false
+timeout_seconds = 1800
