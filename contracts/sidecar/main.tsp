@@ -22,7 +22,7 @@ model RuntimeUpdatePolicy {
   @minValue(60)
   @maxValue(3600)
   poll_seconds: int32;
-  namespace: string;
+  `namespace`: string;
 }
 
 @id("RuntimeValueDefinition")
