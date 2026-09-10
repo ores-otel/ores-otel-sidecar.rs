@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 basic-toml = "=0.1.10"
-flags2env = { git = "https://github.com/flags-2-env/flags-2-env.git", rev = "2310d349cb87dfe7eac88ac67677e029c3e13167", package = "flags2env" }
+flags2env = { git = "https://github.com/flags-2-env/flags-2-env.git", rev = "a01c65aa20455eaad68446a319c63a82921a4ae8", package = "flags2env" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 time = "=0.3.41"
