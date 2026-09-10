@@ -43,7 +43,7 @@ pub use receiver::{
     DEFAULT_MAX_DATA_CHUNK_BYTES, DEFAULT_MAX_METADATA_LINE_BYTES,
 };
 pub use runtime_values::{is_sensitive_runtime_key, RuntimeValueUpdate, RuntimeValues};
-pub use startup_env::{preflight_startup, StartupEnv};
+pub use startup_env::{preflight_startup, preflight_startup_with_keys, StartupEnv};
 
 #[cfg(test)]
 pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
