@@ -85,7 +85,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build the real distroless image
         run: docker build --tag ores-otel-sidecar:ci .
-      - name: Exercise kubelet-style exec probes
+      - name: Exercise startup preflight and kubelet-style exec probes
         run: |
           set -euo pipefail
           docker run --detach \
@@ -105,8 +105,15 @@ jobs:
           done
           test "$ready" -eq 1
 
+          docker exec ores-otel-sidecar-probe /ores-otel-sidecar preflight
           docker exec ores-otel-sidecar-probe /ores-otel-sidecar probe-healthz
           docker exec ores-otel-sidecar-probe /ores-otel-sidecar probe-readyz
+
+          if docker exec --env ORES_OTEL_SIDECAR_ALLOW_NON_LOOPBACK=yes \
+            ores-otel-sidecar-probe /ores-otel-sidecar preflight; then
+            echo "noncanonical raw environment boolean must fail preflight" >&2
+            exit 1
+          fi
 
           if docker exec ores-otel-sidecar-probe \
             /ores-otel-sidecar --definitely-not-declared; then
