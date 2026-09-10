@@ -127,11 +127,17 @@ fn parse_byte_length(metadata: &Value, maximum: usize) -> Result<usize, Receiver
     usize::try_from(requested).map_err(|_| ReceiverError::InvalidByteLength)
 }
 
-pub fn receive_one(
+/// Read and perform the transport-level admission of one newline-delimited
+/// metadata record without consuming any bytes from the data plane.
+///
+/// Product receivers can use this stage to apply their own strict contract
+/// type (for example a TJSV-backed `BuildLogMetadata` projection) before they
+/// call [`receive_data`]. This prevents rejected metadata from advancing the
+/// raw byte stream while keeping framing and size limits centralized here.
+pub fn receive_metadata(
     metadata_reader: &mut impl BufRead,
-    data_reader: &mut impl Read,
     limits: ReceiverLimits,
-) -> Result<Option<ReceiverFrame>, ReceiverError> {
+) -> Result<Option<Value>, ReceiverError> {
     let Some(line) = read_bounded_line(metadata_reader, limits.max_metadata_line_bytes)? else {
         return Ok(None);
     };
@@ -148,7 +154,21 @@ pub fn receive_one(
         return Err(ReceiverError::MissingSchemaVersion);
     }
 
-    let byte_length = parse_byte_length(&metadata, limits.max_data_chunk_bytes)?;
+    // Bound the data claim before returning metadata for product admission. A
+    // consumer can therefore reject an oversized frame without touching FD4.
+    let _ = parse_byte_length(&metadata, limits.max_data_chunk_bytes)?;
+    Ok(Some(metadata))
+}
+
+/// Read exactly the already-admitted metadata record's declared raw byte
+/// length. Callers that have stricter product contracts should invoke this only
+/// after their metadata type has validated successfully.
+pub fn receive_data(
+    data_reader: &mut impl Read,
+    metadata: &Value,
+    limits: ReceiverLimits,
+) -> Result<Vec<u8>, ReceiverError> {
+    let byte_length = parse_byte_length(metadata, limits.max_data_chunk_bytes)?;
     let mut data = vec![0_u8; byte_length];
     let mut received = 0;
     while received < byte_length {
@@ -162,6 +182,18 @@ pub fn receive_one(
             count => received += count,
         }
     }
+    Ok(data)
+}
+
+pub fn receive_one(
+    metadata_reader: &mut impl BufRead,
+    data_reader: &mut impl Read,
+    limits: ReceiverLimits,
+) -> Result<Option<ReceiverFrame>, ReceiverError> {
+    let Some(metadata) = receive_metadata(metadata_reader, limits)? else {
+        return Ok(None);
+    };
+    let data = receive_data(data_reader, &metadata, limits)?;
     Ok(Some(ReceiverFrame { metadata, data }))
 }
 
@@ -209,6 +241,21 @@ mod tests {
         assert_eq!(second.data, b"Rust");
         assert_eq!(first.metadata["sequence"], 1);
         assert_eq!(second.metadata["sequence"], 2);
+    }
+
+    #[test]
+    fn two_stage_api_leaves_data_untouched_until_product_admission() {
+        let mut metadata_input = BufReader::new(Cursor::new(metadata(5, 1)));
+        let mut data_input = Cursor::new(b"hello-tail".to_vec());
+        let admitted = receive_metadata(&mut metadata_input, ReceiverLimits::default())
+            .unwrap()
+            .unwrap();
+        assert_eq!(admitted["sequence"], 1);
+        assert_eq!(data_input.position(), 0);
+
+        let data = receive_data(&mut data_input, &admitted, ReceiverLimits::default()).unwrap();
+        assert_eq!(data, b"hello");
+        assert_eq!(data_input.position(), 5);
     }
 
     #[test]
