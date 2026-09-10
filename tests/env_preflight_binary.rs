@@ -15,6 +15,31 @@ fn run(args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
     command.output().expect("run sidecar preflight")
 }
 
+fn assert_redacted_config_diagnostic(stderr: &[u8]) {
+    let text = String::from_utf8_lossy(stderr);
+    let value: serde_json::Value = serde_json::from_str(text.trim()).expect("one JSON diagnostic");
+    assert_eq!(value["schema"], "ores.otel.log/internal-diagnostic/v1");
+    assert_eq!(value["component"], "sidecar");
+    assert_eq!(value["operation"], "sidecar_configure");
+    assert_eq!(value["outcome"], "rejected");
+    for forbidden in [
+        "message",
+        "error",
+        "raw",
+        "value",
+        "envValue",
+        "authorization",
+        "token",
+        "password",
+        "secret",
+    ] {
+        assert!(
+            value.get(forbidden).is_none(),
+            "forbidden diagnostic field {forbidden}: {text}"
+        );
+    }
+}
+
 #[test]
 fn preflight_accepts_materialized_defaults_without_starting_listener() {
     let output = run(&["preflight"], &[]);
@@ -36,9 +61,7 @@ fn raw_environment_boolean_aliases_fail_closed() {
         );
         assert_eq!(output.status.code(), Some(1), "value={value:?}");
         assert!(output.stdout.is_empty());
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(!stderr.contains(value), "raw value leaked: {stderr}");
-        assert!(stderr.contains("sidecar_configure"), "{stderr}");
+        assert_redacted_config_diagnostic(&output.stderr);
     }
 }
 
@@ -61,5 +84,5 @@ fn malformed_bind_fails_during_startup_semantic_validation() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains(marker));
-    assert!(stderr.contains("sidecar_configure"));
+    assert_redacted_config_diagnostic(&output.stderr);
 }
