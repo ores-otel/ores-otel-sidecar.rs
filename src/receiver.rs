@@ -14,6 +14,7 @@ pub const DEFAULT_MAX_DATA_CHUNK_BYTES: usize = 1024 * 1024;
 pub enum ReceiverError {
     Io(io::Error),
     MetadataTooLarge,
+    TruncatedMetadata,
     InvalidMetadata,
     MissingSchemaVersion,
     InvalidByteLength,
@@ -27,6 +28,9 @@ impl fmt::Display for ReceiverError {
             Self::Io(error) => write!(f, "receiver I/O failed: {error}"),
             Self::MetadataTooLarge => {
                 write!(f, "receiver metadata line exceeds the configured bound")
+            }
+            Self::TruncatedMetadata => {
+                write!(f, "receiver metadata stream closed before newline framing completed")
             }
             Self::InvalidMetadata => write!(f, "receiver metadata is not a JSON object"),
             Self::MissingSchemaVersion => write!(f, "receiver metadata is missing schemaVersion"),
@@ -93,7 +97,7 @@ fn read_bounded_line(
             return if line.is_empty() {
                 Ok(None)
             } else {
-                Ok(Some(line))
+                Err(ReceiverError::TruncatedMetadata)
             };
         }
         let newline = available.iter().position(|byte| *byte == b'\n');
@@ -250,6 +254,16 @@ mod tests {
                 received: 5
             })
         ));
+    }
+
+    #[test]
+    fn rejects_truncated_metadata_before_reading_data() {
+        let line = metadata(5, 1).trim_end_matches('\n').as_bytes().to_vec();
+        let mut metadata_input = BufReader::new(Cursor::new(line));
+        let mut data_input = Cursor::new(b"secret-never-read".to_vec());
+        let result = receive_one(&mut metadata_input, &mut data_input, ReceiverLimits::default());
+        assert!(matches!(result, Err(ReceiverError::TruncatedMetadata)));
+        assert_eq!(data_input.position(), 0);
     }
 
     #[test]
