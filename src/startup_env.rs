@@ -150,6 +150,15 @@ mod tests {
     }
 
     #[test]
+    fn loopback_only_product_empty_bind_fails_closed() {
+        let env = EnvMap::from([("PRODUCT_BIND".to_string(), String::new())]);
+        let errors = preflight_loopback_only_with_key(&env, "PRODUCT_BIND").unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].code, ENV_PARSE);
+        assert_eq!(errors[0].name, "PRODUCT_BIND");
+    }
+
+    #[test]
     fn missing_values_fail_before_runtime_init() {
         let errors = preflight_startup(&EnvMap::new()).unwrap_err();
         assert_eq!(errors.len(), 2);
@@ -174,15 +183,6 @@ mod tests {
         env.insert(BIND.to_string(), String::new());
         let errors = preflight_startup(&env).unwrap_err();
         assert_eq!(errors[0].code, ENV_PARSE);
-    }
-
-    #[test]
-    fn loopback_only_empty_bind_is_rejected_without_value_reflection() {
-        let marker = " synthetic-secret-never-reflect ";
-        let env = EnvMap::from([("PRODUCT_BIND".to_string(), marker.to_string())]);
-        let config = preflight_loopback_only_with_key(&env, "PRODUCT_BIND").unwrap();
-        assert_eq!(config.bind, marker);
-        assert!(!format!("{config:?}").is_empty());
     }
 
     #[test]
