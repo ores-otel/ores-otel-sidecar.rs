@@ -49,7 +49,9 @@ pub use runtime_updates::{
     MAX_SAFE_RUNTIME_REVISION,
 };
 pub use runtime_values::{is_sensitive_runtime_key, RuntimeValueUpdate, RuntimeValues};
-pub use startup_env::{preflight_startup, preflight_startup_with_keys, StartupEnv};
+pub use startup_env::{
+    preflight_loopback_only_with_key, preflight_startup, preflight_startup_with_keys, StartupEnv,
+};
 
 #[cfg(test)]
 pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
