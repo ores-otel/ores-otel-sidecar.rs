@@ -1,0 +1,14 @@
+{
+  "schema": "ores.sidecar/config/v1",
+  "sidecars": [{
+    "id": "local-only",
+    "runtime_updates": {
+      "provider": "disabled",
+      "mode": "disabled",
+      "poll_seconds": 60,
+      "namespace": "local-only",
+      "cache": "runtime-env"
+    },
+    "values": [{"key": "LOG_FILTER", "value": "info"}]
+  }]
+}

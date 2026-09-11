@@ -1,0 +1,13 @@
+{
+  "schema": "ores.sidecar/config/v1",
+  "sidecars": [{
+    "id": "ores-otel-sidecar",
+    "runtime_updates": {
+      "provider": "ores-redis-lru-cache",
+      "mode": "receive-only",
+      "poll_seconds": 180,
+      "namespace": "ores-otel-sidecar",
+      "cache": "runtime env"
+    }
+  }]
+}
