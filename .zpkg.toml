@@ -11,6 +11,11 @@ language = "rust"
 vcs = "git"
 url = "https://github.com/ores-otel/ores-otel-sidecar.rs"
 
+# Cargo.toml remains the immutable native source authority. This coordinate
+# exposes the same producer edge to zed dependency-graph and fleet tooling.
+[dependencies]
+"flags-2-env/flags-2-env" = "=0.3.0"
+
 [build]
 command = "cargo build --release --locked --bin ores-otel-sidecar"
 outputs = ["target/release/ores-otel-sidecar"]
