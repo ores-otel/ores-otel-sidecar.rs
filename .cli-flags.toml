@@ -4,6 +4,7 @@ url = "https://github.com/ores-otel/ores-otel-sidecar.rs"
 columns = ["options", "env", "type", "default", "description"]
 
 [env]
+load = false
 files = []
 
 [parse]

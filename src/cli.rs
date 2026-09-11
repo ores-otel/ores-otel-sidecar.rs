@@ -18,7 +18,7 @@ pub enum SidecarCommand {
 }
 
 /// A validated command plus the immutable environment snapshot after defaults,
-/// dotenv, process environment, dotenv overrides, and argv precedence.
+/// explicitly admitted environment sources, and argv precedence.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CliResolution {
     pub command: SidecarCommand,
@@ -69,7 +69,7 @@ pub fn resolve_process(config_path: &str) -> Result<CliResolution, CliError> {
 }
 
 /// Resolve explicit argv and environment inputs. This is pure apart from reading
-/// the explicitly selected flags-2-env schema and any schema-declared env files.
+/// the explicitly selected flags-2-env schema and sources that schema admits.
 pub fn resolve<I>(
     argv: &[String],
     process_env: I,
@@ -100,9 +100,10 @@ where
     };
 
     // The fully-resolved flags map gives us schema defaults as the lowest
-    // layer. Reapplying the structured source channels then produces the
-    // canonical precedence:
-    // default < dotenv < process environment < dotenv overrides < argv.
+    // layer. The repository-root contract disables dotenv entirely, so its
+    // effective precedence is default < process environment < argv. Keep the
+    // generic source merge here for callers that intentionally select another
+    // reviewed flags-2-env contract.
     let mut values = BTreeMap::new();
     values.extend(parsed.flags);
     values.extend(parsed.dotenv);
@@ -123,6 +124,12 @@ mod tests {
 
     fn argv(items: &[&str]) -> Vec<String> {
         items.iter().map(|item| (*item).to_string()).collect()
+    }
+
+    #[test]
+    fn root_contract_explicitly_disables_dotenv() {
+        let contract = std::fs::read_to_string(config_path()).expect("read root flags contract");
+        assert!(contract.contains("[env]\nload = false\nfiles = []"));
     }
 
     #[test]
