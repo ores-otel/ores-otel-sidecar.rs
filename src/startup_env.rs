@@ -56,6 +56,30 @@ pub fn preflight_startup_with_keys(
     })
 }
 
+/// Validate a product sidecar whose network policy is permanently loopback-only.
+///
+/// Only the product bind key participates in startup admission. The returned
+/// snapshot always carries `allow_non_loopback = false`, so product binaries do
+/// not need to advertise a public flag or environment variable that policy can
+/// never honor. Ambient environment keys outside the declared flags-2-env
+/// contract are deliberately irrelevant to this admission path.
+pub fn preflight_loopback_only_with_key(
+    values: &EnvMap,
+    bind_env: &str,
+) -> Result<StartupEnv, Vec<EnvDiagnostic>> {
+    let specs = [EnvBindingSpec::required("bind", bind_env, EnvValueKind::String)];
+    let resolved = resolve_typed_bindings(values, &specs)?;
+
+    let Some(bind) = resolved.get("bind").and_then(|value| value.as_str()) else {
+        return Err(vec![contract_diagnostic(bind_env, "string")]);
+    };
+
+    Ok(StartupEnv {
+        bind: bind.to_string(),
+        allow_non_loopback: false,
+    })
+}
+
 fn contract_diagnostic(name: &str, expected: &str) -> EnvDiagnostic {
     EnvDiagnostic {
         code: ENV_CONTRACT,
@@ -96,6 +120,36 @@ mod tests {
     }
 
     #[test]
+    fn loopback_only_product_needs_only_its_bind_key() {
+        let env = EnvMap::from([(
+            "PRODUCT_BIND".to_string(),
+            "127.0.0.1:19191".to_string(),
+        )]);
+        let config = preflight_loopback_only_with_key(&env, "PRODUCT_BIND").unwrap();
+        assert_eq!(config.bind, "127.0.0.1:19191");
+        assert!(!config.allow_non_loopback);
+    }
+
+    #[test]
+    fn loopback_only_product_ignores_unowned_non_loopback_environment_keys() {
+        let env = EnvMap::from([
+            ("PRODUCT_BIND".to_string(), "127.0.0.1:19191".to_string()),
+            ("PRODUCT_ALLOW_NON_LOOPBACK".to_string(), "true".to_string()),
+        ]);
+        let config = preflight_loopback_only_with_key(&env, "PRODUCT_BIND").unwrap();
+        assert_eq!(config.bind, "127.0.0.1:19191");
+        assert!(!config.allow_non_loopback);
+    }
+
+    #[test]
+    fn loopback_only_product_missing_bind_fails_closed() {
+        let errors = preflight_loopback_only_with_key(&EnvMap::new(), "PRODUCT_BIND").unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].code, ENV_MISSING);
+        assert_eq!(errors[0].name, "PRODUCT_BIND");
+    }
+
+    #[test]
     fn missing_values_fail_before_runtime_init() {
         let errors = preflight_startup(&EnvMap::new()).unwrap_err();
         assert_eq!(errors.len(), 2);
@@ -120,6 +174,15 @@ mod tests {
         env.insert(BIND.to_string(), String::new());
         let errors = preflight_startup(&env).unwrap_err();
         assert_eq!(errors[0].code, ENV_PARSE);
+    }
+
+    #[test]
+    fn loopback_only_empty_bind_is_rejected_without_value_reflection() {
+        let marker = " synthetic-secret-never-reflect ";
+        let env = EnvMap::from([("PRODUCT_BIND".to_string(), marker.to_string())]);
+        let config = preflight_loopback_only_with_key(&env, "PRODUCT_BIND").unwrap();
+        assert_eq!(config.bind, marker);
+        assert!(!format!("{config:?}").is_empty());
     }
 
     #[test]
