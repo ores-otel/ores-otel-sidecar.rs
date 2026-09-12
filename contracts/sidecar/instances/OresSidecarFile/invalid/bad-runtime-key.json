@@ -1,0 +1,18 @@
+{
+  "schema": "ores.sidecar/config/v1",
+  "sidecars": [
+    {
+      "id": "sidecar",
+      "runtime_updates": {
+        "provider": "disabled",
+        "mode": "disabled",
+        "poll_seconds": 180,
+        "namespace": "sidecar",
+        "cache": "runtime-env"
+      },
+      "values": [
+        { "key": "bad-key", "value": "synthetic" }
+      ]
+    }
+  ]
+}
