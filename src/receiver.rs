@@ -86,6 +86,11 @@ impl Default for ReceiverLimits {
     }
 }
 
+// HOT-PATH (imperative by design): per-frame metadata line assembly on the
+// control plane; the line arrives in buffered slices and rebuilding a fresh Vec
+// per slice would copy the partial line once per fill, so it is extended in
+// place; the buffer lives only inside this function; callers receive one
+// immutable Vec<u8> holding the complete line.
 fn read_bounded_line(
     reader: &mut impl BufRead,
     maximum: usize,
@@ -169,6 +174,11 @@ pub fn receive_data(
     limits: ReceiverLimits,
 ) -> Result<Vec<u8>, ReceiverError> {
     let byte_length = parse_byte_length(metadata, limits.max_data_chunk_bytes)?;
+    // HOT-PATH (imperative by design): per-frame data-plane read of up to
+    // max_data_chunk_bytes; the chunk is read directly into its final buffer
+    // because a new Vec per partial read would copy the payload again; the
+    // buffer and the received count live only inside this loop; callers
+    // receive the complete chunk as one owned Vec<u8>.
     let mut data = vec![0_u8; byte_length];
     let mut received = 0;
     while received < byte_length {
@@ -203,12 +213,15 @@ pub fn receive_all(
     limits: ReceiverLimits,
     mut sink: impl FnMut(ReceiverFrame) -> Result<(), ReceiverError>,
 ) -> Result<u64, ReceiverError> {
-    let mut count = 0_u64;
-    while let Some(frame) = receive_one(metadata_reader, data_reader, limits)? {
-        sink(frame)?;
-        count = count.saturating_add(1);
-    }
-    Ok(count)
+    // Frames are pulled lazily from the readers and folded into a count; the
+    // first receive or sink error ends the fold with that error.
+    std::iter::from_fn(|| receive_one(metadata_reader, data_reader, limits).transpose()).try_fold(
+        0_u64,
+        |count, frame| {
+            sink(frame?)?;
+            Ok(count.saturating_add(1))
+        },
+    )
 }
 
 #[cfg(test)]

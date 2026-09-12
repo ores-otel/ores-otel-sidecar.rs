@@ -58,25 +58,36 @@ impl RuntimeValues {
         mutable: impl IntoIterator<Item = String>,
         initial: impl IntoIterator<Item = (String, String)>,
     ) -> Result<Self, SidecarError> {
-        let mut allowed = BTreeSet::new();
-        for key in mutable {
-            validate_runtime_key(&key)?;
-            if allowed.len() >= MAX_RUNTIME_KEYS || !allowed.insert(key) {
-                return Err(SidecarError::InvalidConfig {
-                    reason: "runtime mutable keys must be unique and bounded",
-                });
-            }
-        }
+        // Both tables are folds that return a new collection per admitted entry;
+        // the first rejected key stops the fold with its error.
+        let allowed =
+            mutable
+                .into_iter()
+                .try_fold(BTreeSet::new(), |allowed: BTreeSet<String>, key| {
+                    validate_runtime_key(&key)?;
+                    if allowed.len() >= MAX_RUNTIME_KEYS || allowed.contains(&key) {
+                        return Err(SidecarError::InvalidConfig {
+                            reason: "runtime mutable keys must be unique and bounded",
+                        });
+                    }
+                    Ok(allowed.into_iter().chain(std::iter::once(key)).collect())
+                })?;
 
-        let mut baseline = BTreeMap::new();
-        for (key, value) in initial {
-            validate_update(&allowed, &key, Some(&value))?;
-            if baseline.len() >= MAX_RUNTIME_KEYS || baseline.insert(key, value).is_some() {
-                return Err(SidecarError::InvalidConfig {
-                    reason: "runtime baseline values must be unique and bounded",
-                });
-            }
-        }
+        let baseline = initial.into_iter().try_fold(
+            BTreeMap::new(),
+            |baseline: BTreeMap<String, String>, (key, value)| {
+                validate_update(&allowed, &key, Some(&value))?;
+                if baseline.len() >= MAX_RUNTIME_KEYS || baseline.contains_key(&key) {
+                    return Err(SidecarError::InvalidConfig {
+                        reason: "runtime baseline values must be unique and bounded",
+                    });
+                }
+                Ok(baseline
+                    .into_iter()
+                    .chain(std::iter::once((key, value)))
+                    .collect())
+            },
+        )?;
 
         Ok(Self {
             mutable: Arc::new(allowed),
@@ -109,9 +120,7 @@ impl RuntimeValues {
             .overrides
             .read()
             .map_err(|_| SidecarError::RuntimeStateUnavailable)?;
-        let mut merged = self.baseline.as_ref().clone();
-        merged.extend(overrides.iter().map(|(key, value)| (key.clone(), value.clone())));
-        Ok(merged)
+        Ok(layered(&self.baseline, &overrides))
     }
 
     pub(crate) fn validate_patch(&self, updates: &[RuntimeValueUpdate]) -> Result<(), SidecarError> {
@@ -121,16 +130,21 @@ impl RuntimeValues {
             });
         }
 
-        let mut seen = BTreeSet::new();
-        for update in updates {
-            if !seen.insert(update.key.as_str()) {
-                return Err(SidecarError::RuntimeUpdateRejected {
-                    key: update.key.clone(),
-                });
-            }
-            validate_update(&self.mutable, &update.key, update.value.as_deref())?;
-        }
-        Ok(())
+        updates
+            .iter()
+            .try_fold(BTreeSet::<&str>::new(), |seen, update| {
+                if seen.contains(update.key.as_str()) {
+                    return Err(SidecarError::RuntimeUpdateRejected {
+                        key: update.key.clone(),
+                    });
+                }
+                validate_update(&self.mutable, &update.key, update.value.as_deref())?;
+                Ok(seen
+                    .into_iter()
+                    .chain(std::iter::once(update.key.as_str()))
+                    .collect())
+            })
+            .map(|_| ())
     }
 
     /// Apply a bounded patch atomically. Every key/value is validated before the
@@ -141,16 +155,10 @@ impl RuntimeValues {
             .overrides
             .write()
             .map_err(|_| SidecarError::RuntimeStateUnavailable)?;
-        for update in updates {
-            match &update.value {
-                Some(value) => {
-                    overrides.insert(update.key.clone(), value.clone());
-                }
-                None => {
-                    overrides.remove(&update.key);
-                }
-            }
-        }
+        // The RwLock is the one stateful holder: the patched map is computed as a
+        // new value from the current one and swapped in with a single assignment.
+        let next = patched(&overrides, updates);
+        *overrides = next;
         Ok(())
     }
 
@@ -177,6 +185,39 @@ impl RuntimeValues {
         *overrides = next.clone();
         Ok(())
     }
+}
+
+/// `base` with `overlay` applied on top: overlay entries win, shadowed base
+/// entries are dropped rather than overwritten, and neither input is touched.
+fn layered(
+    base: &BTreeMap<String, String>,
+    overlay: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    base.iter()
+        .filter(|(key, _)| !overlay.contains_key(*key))
+        .chain(overlay.iter())
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// `current` with a validated patch applied: every patched key is dropped from
+/// the current map, then the keys the patch sets are added back with their new
+/// values (a `None` therefore removes the override).
+fn patched(
+    current: &BTreeMap<String, String>,
+    updates: &[RuntimeValueUpdate],
+) -> BTreeMap<String, String> {
+    current
+        .iter()
+        .filter(|(key, _)| !updates.iter().any(|update| update.key == **key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .chain(updates.iter().filter_map(|update| {
+            update
+                .value
+                .as_ref()
+                .map(|value| (update.key.clone(), value.clone()))
+        }))
+        .collect()
 }
 
 fn validate_update(

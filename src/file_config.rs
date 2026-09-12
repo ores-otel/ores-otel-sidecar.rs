@@ -181,32 +181,45 @@ impl OresSidecarFile {
             });
         }
 
-        let mut ids = BTreeSet::new();
-        for sidecar in &self.sidecars {
-            validate_identity(&sidecar.id)?;
-            if !ids.insert(sidecar.id.as_str()) {
-                return Err(SidecarError::InvalidConfig {
-                    reason: "sidecar identities must be unique",
-                });
-            }
-            if sidecar.path.as_deref().is_some_and(str::is_empty)
-                || sidecar.startup_config.as_deref().is_some_and(str::is_empty)
-            {
-                return Err(SidecarError::InvalidConfig {
-                    reason: "sidecar path fields cannot be empty",
-                });
-            }
-            validate_runtime_policy(&sidecar.runtime_updates)?;
-            RuntimeValues::new(
-                sidecar.runtime_mutable.iter().cloned(),
-                sidecar
-                    .values
-                    .iter()
-                    .map(|entry| (entry.key.clone(), entry.value.clone())),
-            )?;
-        }
-        Ok(())
+        // Every sidecar is checked in order; the fold carries the identities seen
+        // so far as a value and stops at the first invalid entry.
+        self.sidecars
+            .iter()
+            .try_fold(BTreeSet::<&str>::new(), |ids, sidecar| {
+                validate_identity(&sidecar.id)?;
+                if ids.contains(sidecar.id.as_str()) {
+                    return Err(SidecarError::InvalidConfig {
+                        reason: "sidecar identities must be unique",
+                    });
+                }
+                validate_sidecar_shape(sidecar)?;
+                Ok(ids
+                    .into_iter()
+                    .chain(std::iter::once(sidecar.id.as_str()))
+                    .collect())
+            })
+            .map(|_| ())
     }
+}
+
+/// The per-sidecar checks that do not depend on the other entries.
+fn validate_sidecar_shape(sidecar: &SidecarDefinition) -> Result<(), SidecarError> {
+    if sidecar.path.as_deref().is_some_and(str::is_empty)
+        || sidecar.startup_config.as_deref().is_some_and(str::is_empty)
+    {
+        return Err(SidecarError::InvalidConfig {
+            reason: "sidecar path fields cannot be empty",
+        });
+    }
+    validate_runtime_policy(&sidecar.runtime_updates)?;
+    RuntimeValues::new(
+        sidecar.runtime_mutable.iter().cloned(),
+        sidecar
+            .values
+            .iter()
+            .map(|entry| (entry.key.clone(), entry.value.clone())),
+    )?;
+    Ok(())
 }
 
 fn validate_identity(id: &str) -> Result<(), SidecarError> {

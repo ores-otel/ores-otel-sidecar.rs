@@ -86,11 +86,95 @@ pub struct RuntimeUpdateState {
     pub backend_key_count: usize,
 }
 
-#[derive(Debug, Default)]
+/// The controller's state as an immutable value. Reductions compute the next
+/// state with the methods below and the `Mutex` holder swaps it in; no field is
+/// ever assigned through the lock guard.
+#[derive(Clone, Debug, Default)]
 struct RuntimeUpdateInner {
     revision: u64,
     stale: bool,
     backend_keys: BTreeSet<String>,
+}
+
+/// What an ordered event does to the controller, decided without touching any
+/// state or value.
+enum Admission {
+    /// The event is not applied; `next` is the state to keep (possibly marked stale).
+    Rejected {
+        next: RuntimeUpdateInner,
+        outcome: RuntimeUpdateOutcome,
+    },
+    /// The event is in sequence and may be applied to values.
+    Admitted,
+}
+
+impl RuntimeUpdateInner {
+    fn marked_stale(&self) -> Self {
+        Self {
+            stale: true,
+            ..self.clone()
+        }
+    }
+
+    /// The state after an authoritative revision is installed with `backend_keys`.
+    fn advanced(revision: u64, backend_keys: BTreeSet<String>) -> Self {
+        Self {
+            revision,
+            stale: false,
+            backend_keys,
+        }
+    }
+
+    fn admit(&self, batch: &RuntimeUpdateBatch) -> Admission {
+        let reconcile_required = RuntimeUpdateOutcome::ReconcileRequired {
+            current: self.revision,
+            incoming: batch.revision,
+        };
+        if batch.revision <= self.revision {
+            return Admission::Rejected {
+                next: self.clone(),
+                outcome: RuntimeUpdateOutcome::Duplicate {
+                    revision: self.revision,
+                },
+            };
+        }
+        if self.stale {
+            return Admission::Rejected {
+                next: self.clone(),
+                outcome: reconcile_required,
+            };
+        }
+        if batch.revision != self.revision.saturating_add(1)
+            || batch.operation == RuntimeUpdateOperation::Resync
+        {
+            return Admission::Rejected {
+                next: self.marked_stale(),
+                outcome: reconcile_required,
+            };
+        }
+        Admission::Admitted
+    }
+
+    /// The backend key set after an admitted event is applied.
+    fn backend_keys_after(&self, batch: &RuntimeUpdateBatch) -> BTreeSet<String> {
+        match batch.operation {
+            RuntimeUpdateOperation::Upsert => self
+                .backend_keys
+                .iter()
+                .chain(batch.entries.keys())
+                .cloned()
+                .collect(),
+            RuntimeUpdateOperation::Delete => self
+                .backend_keys
+                .iter()
+                .filter(|key| !batch.keys.contains(*key))
+                .cloned()
+                .collect(),
+            RuntimeUpdateOperation::Replace => batch.entries.keys().cloned().collect(),
+            RuntimeUpdateOperation::Invalidate => BTreeSet::new(),
+            RuntimeUpdateOperation::Resync => unreachable!("resync is rejected at admission"),
+        }
+    }
 }
 
 /// Revision-aware, provider-neutral update reducer. Redis-LRU adapters feed
@@ -170,9 +254,8 @@ impl RuntimeUpdateController {
         }
 
         self.values.replace_overrides(&entries)?;
-        state.revision = revision;
-        state.stale = false;
-        state.backend_keys = entries.keys().cloned().collect();
+        let next = RuntimeUpdateInner::advanced(revision, entries.keys().cloned().collect());
+        *state = next;
         Ok(RuntimeUpdateOutcome::Applied { revision })
     }
 
@@ -190,32 +273,23 @@ impl RuntimeUpdateController {
             .lock()
             .map_err(|_| SidecarError::RuntimeStateUnavailable)?;
 
-        if batch.revision <= state.revision {
-            return Ok(RuntimeUpdateOutcome::Duplicate {
-                revision: state.revision,
-            });
-        }
-        if state.stale {
-            return Ok(RuntimeUpdateOutcome::ReconcileRequired {
-                current: state.revision,
-                incoming: batch.revision,
-            });
-        }
-        if batch.revision != state.revision.saturating_add(1) {
-            state.stale = true;
-            return Ok(RuntimeUpdateOutcome::ReconcileRequired {
-                current: state.revision,
-                incoming: batch.revision,
-            });
-        }
-        if batch.operation == RuntimeUpdateOperation::Resync {
-            state.stale = true;
-            return Ok(RuntimeUpdateOutcome::ReconcileRequired {
-                current: state.revision,
-                incoming: batch.revision,
-            });
+        if let Admission::Rejected { next, outcome } = state.admit(&batch) {
+            *state = next;
+            return Ok(outcome);
         }
 
+        // The value effect is the one boundary; the next controller state is a
+        // value computed from the current one and installed only after the
+        // effect succeeded, so a rejected patch leaves the revision untouched.
+        self.apply_values(&batch)?;
+        let next = RuntimeUpdateInner::advanced(batch.revision, state.backend_keys_after(&batch));
+        *state = next;
+        Ok(RuntimeUpdateOutcome::Applied {
+            revision: batch.revision,
+        })
+    }
+
+    fn apply_values(&self, batch: &RuntimeUpdateBatch) -> Result<(), SidecarError> {
         match batch.operation {
             RuntimeUpdateOperation::Upsert => {
                 let patch = batch
@@ -223,8 +297,7 @@ impl RuntimeUpdateController {
                     .iter()
                     .map(|(key, value)| RuntimeValueUpdate::set(key.clone(), value.clone()))
                     .collect::<Vec<_>>();
-                self.values.apply_patch(&patch)?;
-                state.backend_keys.extend(batch.entries.keys().cloned());
+                self.values.apply_patch(&patch)
             }
             RuntimeUpdateOperation::Delete => {
                 let patch = batch
@@ -233,27 +306,12 @@ impl RuntimeUpdateController {
                     .cloned()
                     .map(RuntimeValueUpdate::remove)
                     .collect::<Vec<_>>();
-                self.values.apply_patch(&patch)?;
-                for key in &batch.keys {
-                    state.backend_keys.remove(key);
-                }
+                self.values.apply_patch(&patch)
             }
-            RuntimeUpdateOperation::Replace => {
-                self.values.replace_overrides(&batch.entries)?;
-                state.backend_keys = batch.entries.keys().cloned().collect();
-            }
-            RuntimeUpdateOperation::Invalidate => {
-                self.values.replace_overrides(&BTreeMap::new())?;
-                state.backend_keys.clear();
-            }
-            RuntimeUpdateOperation::Resync => unreachable!("resync handled before mutation"),
+            RuntimeUpdateOperation::Replace => self.values.replace_overrides(&batch.entries),
+            RuntimeUpdateOperation::Invalidate => self.values.replace_overrides(&BTreeMap::new()),
+            RuntimeUpdateOperation::Resync => unreachable!("resync is rejected at admission"),
         }
-
-        state.revision = batch.revision;
-        state.stale = false;
-        Ok(RuntimeUpdateOutcome::Applied {
-            revision: batch.revision,
-        })
     }
 
     fn validate_target(&self, namespace: &str, cache: &str) -> Result<(), SidecarError> {
