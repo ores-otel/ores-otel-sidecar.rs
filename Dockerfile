@@ -35,7 +35,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry,sharin
         oresoftware-next-loggers \
     && strip /launcher/bin/ores-launcher
 
-FROM rust:1.90-bookworm AS build
+FROM rust:1.95-bookworm AS build
 ARG TARGETARCH
 WORKDIR /src
 COPY . .
