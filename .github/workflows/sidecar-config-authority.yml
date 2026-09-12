@@ -1,0 +1,85 @@
+name: sidecar-config-peer-authority
+
+on:
+  pull_request:
+    paths:
+      - "contracts/sidecar/**"
+      - ".github/workflows/sidecar-config-authority.yml"
+  push:
+    branches: [main, dev]
+    paths:
+      - "contracts/sidecar/**"
+      - ".github/workflows/sidecar-config-authority.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sidecar-config-peer-authority-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact candidate revision
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Generate comparison Schema B and compare independent authorities
+        uses: ORESoftware/typespec-json-schema-validator@5b04b08512f8a03a376dcb96818969e2d83c2d84
+        with:
+          typespec: contracts/sidecar/main.tsp
+          schema: contracts/sidecar/authored.schema.json
+          instances: contracts/sidecar/instances
+          report: .typespec-json-schema-validator/sidecar.report.json
+          contract_ir: .typespec-json-schema-validator/sidecar.contract-ir.json
+          output_dir: .typespec-json-schema-validator/generated
+          max_probes: "64"
+          quiet: "false"
+
+      - name: Require peer authority and differential convergence
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '
+            .status == "passed" and
+            .zeroUnexplainedFindings == true and
+            .authorities.precedence == "none" and
+            .authorities.typespec.authority == "independently-authored" and
+            .authorities.jsonSchema.authority == "independently-authored" and
+            .authorities.typespec.generatedJsonSchemaRole == "comparison-evidence-only" and
+            (.differential.summary.divergences // 0) == 0 and
+            (.differential.summary.refusals // 0) == 0
+          ' .typespec-json-schema-validator/sidecar.report.json >/dev/null
+          jq -e '
+            .status == "passed" and
+            .admissible == true and
+            .editableAuthority == false
+          ' .typespec-json-schema-validator/sidecar.contract-ir.json >/dev/null
+          test -s .typespec-json-schema-validator/generated/typespec.generated.schema.json
+
+      - name: Prove both authored authorities remain authored
+        shell: bash
+        run: git diff --exit-code -- contracts/sidecar/main.tsp contracts/sidecar/authored.schema.json contracts/sidecar/instances
+
+      - name: Retain parity evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sidecar-config-peer-authority-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .typespec-json-schema-validator/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
