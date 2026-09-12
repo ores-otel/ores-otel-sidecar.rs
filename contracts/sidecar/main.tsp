@@ -34,22 +34,37 @@ model RuntimeUpdatePolicy {
 
 @id("RuntimeValueDefinition")
 model RuntimeValueDefinition {
+  @minLength(1)
+  @maxLength(128)
+  @pattern("^[A-Z_][A-Z0-9_]*$")
   key: string;
+  @maxLength(65536)
   value: string;
 }
 
 @id("SidecarDefinition")
 model SidecarDefinition {
+  @minLength(1)
+  @maxLength(96)
+  @pattern("^[A-Za-z0-9._-]+$")
   id: string;
+  @minLength(1)
+  @maxLength(256)
   path?: string;
+  @minLength(1)
+  @maxLength(256)
   startup_config?: string;
   runtime_updates: RuntimeUpdatePolicy;
+  @maxItems(128)
   runtime_mutable?: string[];
+  @maxItems(128)
   values?: RuntimeValueDefinition[];
 }
 
 @id("OresSidecarFile")
 model OresSidecarFile {
   schema: "ores.sidecar/config/v1";
+  @minItems(1)
+  @maxItems(64)
   sidecars: SidecarDefinition[];
 }
