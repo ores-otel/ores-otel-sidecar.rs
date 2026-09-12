@@ -16,3 +16,8 @@ temp/
 
 # typespec-json-schema-validator comparison evidence (generated; never an authority)
 .typespec-json-schema-validator/
+# Repository-local temporary data and authorized Git worktrees
+tmp
+temp
+tmp/worktrees
+temp/worktrees
