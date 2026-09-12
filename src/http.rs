@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::time::Duration;
 
+use crate::apm;
 use crate::config::SidecarConfig;
 use crate::health;
 use crate::identity::SidecarIdentity;
@@ -142,12 +143,13 @@ pub fn response_for(
                 (code, "application/json", format!("{body}\n"))
             }
             Route::Metrics => {
-                let body = format!(
+                let mut body = format!(
                     "# HELP ores_otel_sidecar_up Whether the sidecar probe listener is serving.\n\
                      # TYPE ores_otel_sidecar_up gauge\n\
                      ores_otel_sidecar_up{{service=\"{}\"}} 1\n",
                     identity.service
                 );
+                body.push_str(&apm::prometheus_text(identity.service));
                 (200, "text/plain; version=0.0.4", body)
             }
         },
@@ -349,6 +351,22 @@ mod tests {
         assert_eq!(ctype, "application/json");
         assert!(body.contains("\"ok\":true"));
         assert!(body.contains("ores-otel-sidecar"));
+    }
+
+    #[test]
+    fn metrics_response_includes_process_and_filesystem_collector_state() {
+        let (code, ctype, body) = response_for(
+            Request::Ok {
+                method: Method::Get,
+                route: Route::Metrics,
+            },
+            SidecarIdentity::ORES_OTEL,
+            &NoopProbe,
+        );
+        assert_eq!(code, 200);
+        assert_eq!(ctype, "text/plain; version=0.0.4");
+        assert!(body.contains("ores_otel_sidecar_up"));
+        assert!(body.contains("ores_otel_resource_collector_supported"));
     }
 
     #[test]
