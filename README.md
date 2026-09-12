@@ -23,6 +23,19 @@ Product binaries inherit this crate:
 ores-otel-sidecar = { git = "https://github.com/ores-otel/ores-otel-sidecar.rs", rev = "<pinned-commit>" }
 ```
 
+## Build toolchain
+
+The sidecar application requires Rust 1.95 because the pinned `sysinfo` collector
+requires that compiler. `Cargo.toml`, `rust-toolchain.toml`, application CI, and
+the Docker application build agree on this minimum. The separately pinned
+`ores-launcher` is still built with its independent Rust 1.90 toolchain.
+
+Run `cargo test --all-targets --locked` and
+`cargo clippy --all-targets --locked -- -D warnings`. A missing manifest
+dependency in `Cargo.lock` must fail this admission; do not omit `--locked` in CI.
+Product consumers must update their own compiler and image build before moving
+their immutable sidecar revision to this line.
+
 ## Deterministic startup preflight
 
 The executable does not enter application runtime code until its final startup
