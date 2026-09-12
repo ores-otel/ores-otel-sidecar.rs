@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod apm;
 pub mod bind;
 pub mod cli;
 pub mod config;
@@ -27,6 +28,10 @@ pub mod runtime_updates;
 pub mod runtime_values;
 pub mod startup_env;
 
+pub use apm::{
+    prometheus_text as apm_prometheus_text, FilesystemResourceSnapshot, ProcessResourceSnapshot,
+    ResourceCollector, ResourceSnapshot,
+};
 pub use cli::{CliError, CliResolution, SidecarCommand};
 pub use config::SidecarConfig;
 pub use error::SidecarError;
