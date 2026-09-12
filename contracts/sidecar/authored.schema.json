@@ -33,8 +33,8 @@
       "$id": "RuntimeValueDefinition",
       "type": "object",
       "properties": {
-        "key": { "type": "string" },
-        "value": { "type": "string" }
+        "key": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Z_][A-Z0-9_]*$" },
+        "value": { "type": "string", "maxLength": 65536 }
       },
       "required": ["key", "value"],
       "unevaluatedProperties": false
@@ -44,12 +44,12 @@
       "$id": "SidecarDefinition",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "path": { "type": "string" },
-        "startup_config": { "type": "string" },
+        "id": { "type": "string", "minLength": 1, "maxLength": 96, "pattern": "^[A-Za-z0-9._-]+$" },
+        "path": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "startup_config": { "type": "string", "minLength": 1, "maxLength": 256 },
         "runtime_updates": { "$ref": "RuntimeUpdatePolicy" },
-        "runtime_mutable": { "type": "array", "items": { "type": "string" } },
-        "values": { "type": "array", "items": { "$ref": "RuntimeValueDefinition" } }
+        "runtime_mutable": { "type": "array", "maxItems": 128, "items": { "type": "string" } },
+        "values": { "type": "array", "maxItems": 128, "items": { "$ref": "RuntimeValueDefinition" } }
       },
       "required": ["id", "runtime_updates"],
       "unevaluatedProperties": false
@@ -60,7 +60,7 @@
       "type": "object",
       "properties": {
         "schema": { "type": "string", "const": "ores.sidecar/config/v1" },
-        "sidecars": { "type": "array", "items": { "$ref": "SidecarDefinition" } }
+        "sidecars": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "SidecarDefinition" } }
       },
       "required": ["schema", "sidecars"],
       "unevaluatedProperties": false
