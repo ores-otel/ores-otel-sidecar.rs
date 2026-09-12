@@ -52,17 +52,20 @@ pub fn classify_request_line(line: &str) -> Request {
     if line.as_bytes().contains(&0) || line.contains('\r') {
         return Request::Reject(Reject::Invalid);
     }
-    let mut parts = line.split(' ');
-    let method = match parts.next().unwrap_or("") {
+    let parts = line.split(' ').collect::<Vec<_>>();
+    let method = match parts.first().copied().unwrap_or("") {
         "GET" => Method::Get,
         "HEAD" => Method::Head,
         "" => return Request::Reject(Reject::Invalid),
         _ => return Request::Reject(Reject::MethodNotAllowed),
     };
-    let path = parts.next().unwrap_or("");
-    let version = parts.next().unwrap_or("");
-    if path.is_empty() || (version != "HTTP/1.1" && version != "HTTP/1.0") || parts.next().is_some()
-    {
+    // Exactly three tokens: anything else (missing path or version, extra
+    // tokens) is malformed.
+    let [_, path, version] = parts.as_slice() else {
+        return Request::Reject(Reject::Invalid);
+    };
+    let (path, version) = (*path, *version);
+    if path.is_empty() || (version != "HTTP/1.1" && version != "HTTP/1.0") {
         return Request::Reject(Reject::Invalid);
     }
     if path.contains('%')
@@ -164,16 +167,87 @@ fn write_http(
     head_only: bool,
 ) -> std::io::Result<()> {
     let content_length = if head_only { 0 } else { body.len() };
-    let mut out = format!(
-        "HTTP/1.1 {}\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\ncache-control: no-store\r\nx-content-type-options: nosniff\r\nx-frame-options: DENY\r\ncontent-security-policy: default-src 'none'; connect-src 'self'\r\n\r\n",
+    let payload = if head_only { "" } else { body };
+    let out = format!(
+        "HTTP/1.1 {}\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\ncache-control: no-store\r\nx-content-type-options: nosniff\r\nx-frame-options: DENY\r\ncontent-security-policy: default-src 'none'; connect-src 'self'\r\n\r\n{}",
         status_line(code),
         content_type,
-        content_length
+        content_length,
+        payload
     );
-    if !head_only {
-        out.push_str(body);
-    }
     stream.write_all(out.as_bytes())
+}
+
+/// What the header block has established so far. Parsing the headers is a
+/// `try_fold` over this value: [`Headers::with`] consumes one header line and
+/// returns the next state or the rejection.
+#[derive(Default)]
+struct Headers {
+    count: usize,
+    content_length: Option<u64>,
+    saw_host: bool,
+}
+
+impl Headers {
+    fn with(self, line: &str) -> Result<Self, Reject> {
+        if line.as_bytes().contains(&0) || !line.contains(':') {
+            return Err(Reject::Invalid);
+        }
+        let count = self.count + 1;
+        if count > MAX_HEADERS {
+            return Err(Reject::HeaderTooLarge);
+        }
+        let lower = line.to_ascii_lowercase();
+        let saw_host = if lower.starts_with("host:") {
+            let value = line
+                .split_once(':')
+                .map(|(_, rest)| rest.trim())
+                .unwrap_or("");
+            if value.is_empty() {
+                return Err(Reject::Invalid);
+            }
+            true
+        } else {
+            self.saw_host
+        };
+        if lower.starts_with("expect:") || lower.starts_with("transfer-encoding:") {
+            return Err(Reject::BodyNotAllowed);
+        }
+        let content_length = match lower.strip_prefix("content-length:") {
+            Some(rest) => {
+                let parsed = rest.trim().parse().unwrap_or(u64::MAX);
+                if self
+                    .content_length
+                    .is_some_and(|previous| previous != parsed)
+                {
+                    return Err(Reject::Invalid);
+                }
+                Some(parsed)
+            }
+            None => self.content_length,
+        };
+        Ok(Self {
+            count,
+            content_length,
+            saw_host,
+        })
+    }
+}
+
+/// The header lines as the stream yields them, terminators included. The
+/// iterator ends at EOF or at the blank line that closes the header block, and
+/// yields the rejection for an unreadable or oversized line.
+fn header_lines<R: BufRead>(reader: &mut R) -> impl Iterator<Item = Result<String, Reject>> + '_ {
+    std::iter::from_fn(move || {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => None,
+            Ok(_) if line.len() > MAX_HEADER_LINE => Some(Err(Reject::HeaderTooLarge)),
+            Ok(_) if line == "\r\n" || line == "\n" => None,
+            Ok(_) => Some(Ok(line)),
+            Err(_) => Some(Err(Reject::Invalid)),
+        }
+    })
 }
 
 fn read_request(stream: &mut TcpStream) -> Request {
@@ -187,56 +261,16 @@ fn read_request(stream: &mut TcpStream) -> Request {
     }
     let http11 = line.contains("HTTP/1.1");
     let classified = classify_request_line(&line);
-    let mut headers = 0;
-    let mut content_length = 0_u64;
-    let mut saw_content_length = false;
-    let mut saw_host = false;
-    loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) if line.len() > MAX_HEADER_LINE => {
-                return Request::Reject(Reject::HeaderTooLarge)
-            }
-            Ok(_) => {}
-            Err(_) => return Request::Reject(Reject::Invalid),
-        }
-        if line == "\r\n" || line == "\n" {
-            break;
-        }
-        if line.as_bytes().contains(&0) || !line.contains(':') {
-            return Request::Reject(Reject::Invalid);
-        }
-        headers += 1;
-        if headers > MAX_HEADERS {
-            return Request::Reject(Reject::HeaderTooLarge);
-        }
-        let lower = line.to_ascii_lowercase();
-        if lower.starts_with("host:") {
-            let value = line
-                .split_once(':')
-                .map(|(_, rest)| rest.trim())
-                .unwrap_or("");
-            if value.is_empty() {
-                return Request::Reject(Reject::Invalid);
-            }
-            saw_host = true;
-        }
-        if lower.starts_with("expect:") || lower.starts_with("transfer-encoding:") {
-            return Request::Reject(Reject::BodyNotAllowed);
-        }
-        if let Some(rest) = lower.strip_prefix("content-length:") {
-            let parsed = rest.trim().parse().unwrap_or(u64::MAX);
-            if saw_content_length && parsed != content_length {
-                return Request::Reject(Reject::Invalid);
-            }
-            saw_content_length = true;
-            content_length = parsed;
-        }
-    }
-    if matches!(classified, Request::Ok { .. }) && http11 && !saw_host {
+    let headers = match header_lines(&mut reader)
+        .try_fold(Headers::default(), |headers, line| headers.with(&line?))
+    {
+        Ok(headers) => headers,
+        Err(reject) => return Request::Reject(reject),
+    };
+    if matches!(classified, Request::Ok { .. }) && http11 && !headers.saw_host {
         return Request::Reject(Reject::Invalid);
     }
+    let content_length = headers.content_length.unwrap_or(0);
     if content_length > 0 {
         let mut sink = vec![0_u8; content_length.min(64) as usize];
         let _ = reader.read(&mut sink);
