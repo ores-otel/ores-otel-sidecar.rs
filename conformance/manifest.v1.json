@@ -1,9 +1,12 @@
 {
   "schema": "ores.conformance.manifest/v1",
   "repository": "ores-otel/ores-otel-sidecar.rs",
-  "coverageStatus": "bootstrap",
-  "contractRoots": ["contracts"],
+  "contractRoots": ["contracts/"],
   "caseRoots": ["conformance/cases"],
+  "caseSchema": "conformance/case.schema.json",
   "evidenceDir": "artifacts/conformance/evidence",
-  "requiredParticipants": []
+  "requiredParticipants": [],
+  "coverage": {"status": "scaffold-only", "behavioralCasesRequired": false},
+  "evidence": {"bindToContractDigests": true, "bindToCaseDigests": true, "missingRequiredEvidenceFails": true, "staleEvidenceFails": true},
+  "policy": {"runtimeSpecificGoldensAllowed": false, "generatedEvidenceIsAuthority": false}
 }
