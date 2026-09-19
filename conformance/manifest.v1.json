@@ -1,0 +1,9 @@
+{
+  "schema": "ores.conformance.manifest/v1",
+  "repository": "ores-otel/ores-otel-sidecar.rs",
+  "coverageStatus": "bootstrap",
+  "contractRoots": ["contracts"],
+  "caseRoots": ["conformance/cases"],
+  "evidenceDir": "artifacts/conformance/evidence",
+  "requiredParticipants": []
+}
