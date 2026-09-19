@@ -1,0 +1,28 @@
+name: conformance-boundary
+
+on:
+  pull_request:
+    paths:
+      - 'contracts/**'
+      - 'conformance/**'
+      - '.github/workflows/conformance-boundary.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/**'
+      - 'conformance/**'
+      - '.github/workflows/conformance-boundary.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Check conformance boundary
+        run: node conformance/check.mjs
