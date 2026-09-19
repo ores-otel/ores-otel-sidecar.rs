@@ -1,0 +1,18 @@
+{
+  "schema": "ores.conformance.bootstrap/v1",
+  "repository": "ores-otel/ores-otel-sidecar.rs",
+  "id": "authority-boundary",
+  "contractRoot": "contracts/",
+  "status": "bootstrap-only",
+  "expected": {
+    "contractsRemainAuthoritative": true,
+    "conformanceIsSharedAcrossImplementations": true,
+    "runtimeSpecificGoldensAllowed": false,
+    "staleEvidenceAccepted": false,
+    "missingRequiredRuntimeEvidenceAccepted": false
+  },
+  "notes": [
+    "This bootstrap case establishes the repository-level conformance boundary only.",
+    "Add sidecar protocol/lifecycle input and normalized expected-receipt cases before claiming behavioral equivalence."
+  ]
+}
