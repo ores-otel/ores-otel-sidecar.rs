@@ -5,12 +5,14 @@ on:
     paths:
       - 'contracts/**'
       - 'conformance/**'
+      - 'artifacts/conformance/evidence/**'
       - '.github/workflows/conformance-boundary.yml'
   push:
     branches: [main]
     paths:
       - 'contracts/**'
       - 'conformance/**'
+      - 'artifacts/conformance/evidence/**'
       - '.github/workflows/conformance-boundary.yml'
 
 permissions:
@@ -25,4 +27,6 @@ jobs:
         with:
           persist-credentials: false
       - name: Check conformance boundary
-        run: node conformance/check.mjs
+        run: |
+          node --check conformance/check.mjs
+          node conformance/check.mjs
