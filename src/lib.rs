@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod adapters;
 pub mod apm;
 pub mod bind;
 pub mod cli;
