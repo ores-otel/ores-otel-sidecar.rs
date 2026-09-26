@@ -19,6 +19,7 @@ pub enum PersistedLifecycleState {
     Frozen,
     Checkpointing,
     Hibernated,
+    Thawing,
     Restoring,
 }
 
@@ -112,7 +113,8 @@ impl LifecycleRecord {
             PersistedLifecycleState::Running
             | PersistedLifecycleState::Quiescing
             | PersistedLifecycleState::Freezing
-            | PersistedLifecycleState::Frozen => {
+            | PersistedLifecycleState::Frozen
+            | PersistedLifecycleState::Thawing => {
                 if self.checkpoint.is_some() {
                     return Err(LifecycleRecordError::CheckpointNotAllowed);
                 }
@@ -193,6 +195,14 @@ mod tests {
         };
     }
 
+    fn checkpoint() -> LifecycleCheckpoint {
+        return LifecycleCheckpoint {
+            artifact_ref: "checkpoint://tenant-42-shard-3/sha256:abc".to_owned(),
+            digest: "sha256:abc".to_owned(),
+            format: "criu-v1".to_owned(),
+        };
+    }
+
     #[test]
     fn stale_fence_cannot_publish_state() {
         let current = record();
@@ -257,6 +267,34 @@ mod tests {
         assert_eq!(
             value.validate(),
             Err(LifecycleRecordError::CheckpointRequired)
+        );
+    }
+
+    #[test]
+    fn restoring_record_requires_checkpoint() {
+        let mut value = record();
+        value.state = PersistedLifecycleState::Restoring;
+        value.strategy = PersistedSuspendStrategy::Hibernate;
+
+        assert_eq!(
+            value.validate(),
+            Err(LifecycleRecordError::CheckpointRequired)
+        );
+
+        value.checkpoint = Some(checkpoint());
+        assert_eq!(value.validate(), Ok(()));
+    }
+
+    #[test]
+    fn thawing_record_must_not_have_checkpoint() {
+        let mut value = record();
+        value.state = PersistedLifecycleState::Thawing;
+        assert_eq!(value.validate(), Ok(()));
+
+        value.checkpoint = Some(checkpoint());
+        assert_eq!(
+            value.validate(),
+            Err(LifecycleRecordError::CheckpointNotAllowed)
         );
     }
 
