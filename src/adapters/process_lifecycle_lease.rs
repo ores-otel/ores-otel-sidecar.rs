@@ -16,12 +16,16 @@ use ores_locks_and_leases::{
 const LOCK_PREFIX: &str = "process-lifecycle";
 const MAX_SEGMENT_BYTES: usize = 96;
 
-/// Stable identity used to derive the distributed lifecycle lock key.
+/// Stable logical identity used to derive the distributed lifecycle lock key.
+///
+/// Node identity is deliberately excluded. A shard/workload may move between
+/// hosts during scale-down, failover, or rebalancing, and old/new controllers
+/// must still contend on the same fenced authority. Put node identity in the
+/// lease holder/controller metadata instead.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LifecycleLeaseScope {
     product: String,
     cluster: String,
-    node: String,
     workload: String,
 }
 
@@ -29,31 +33,27 @@ impl LifecycleLeaseScope {
     pub fn new(
         product: impl Into<String>,
         cluster: impl Into<String>,
-        node: impl Into<String>,
         workload: impl Into<String>,
     ) -> Result<Self, LifecycleLeaseScopeError> {
         let product = product.into();
         let cluster = cluster.into();
-        let node = node.into();
         let workload = workload.into();
 
         validate_segment("product", &product)?;
         validate_segment("cluster", &cluster)?;
-        validate_segment("node", &node)?;
         validate_segment("workload", &workload)?;
 
         return Ok(Self {
             product,
             cluster,
-            node,
             workload,
         });
     }
 
     pub fn lock_key(&self) -> Result<LockKey, LifecycleLeaseScopeError> {
         let value = format!(
-            "{LOCK_PREFIX}/{}/{}/{}/{}",
-            self.product, self.cluster, self.node, self.workload
+            "{LOCK_PREFIX}/{}/{}/{}",
+            self.product, self.cluster, self.workload
         );
 
         return LockKey::new(value).map_err(|_error| LifecycleLeaseScopeError::LockKeyTooLong);
@@ -201,41 +201,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scope_derives_stable_lock_key() {
-        let key = LifecycleLeaseScope::new(
-            "beamscale",
-            "prod-us-east",
-            "node-17",
-            "tenant-42",
-        )
-        .and_then(|scope| scope.lock_key())
-        .map(|key| key.as_str().to_owned());
+    fn scope_derives_node_independent_lock_key() {
+        let key = LifecycleLeaseScope::new("beamscale", "prod-us-east", "tenant-42")
+            .and_then(|scope| scope.lock_key())
+            .map(|key| key.as_str().to_owned());
 
         assert_eq!(
             key,
-            Ok("process-lifecycle/beamscale/prod-us-east/node-17/tenant-42".to_owned())
+            Ok("process-lifecycle/beamscale/prod-us-east/tenant-42".to_owned())
         );
     }
 
     #[test]
     fn path_separator_is_rejected_inside_segments() {
-        let scope = LifecycleLeaseScope::new(
-            "scintilla-run",
-            "prod",
-            "node/escape",
-            "worker-1",
-        );
+        let scope = LifecycleLeaseScope::new("scintilla-run", "prod", "worker/escape");
 
         assert_eq!(
             scope,
-            Err(LifecycleLeaseScopeError::InvalidSegment { field: "node" })
+            Err(LifecycleLeaseScopeError::InvalidSegment { field: "workload" })
         );
     }
 
     #[test]
     fn long_segment_is_rejected_before_lock_key_construction() {
         let workload = "w".repeat(MAX_SEGMENT_BYTES + 1);
-        let scope = LifecycleLeaseScope::new("beamscale", "prod", "node-1", workload);
+        let scope = LifecycleLeaseScope::new("beamscale", "prod", workload);
 
         assert_eq!(
             scope,
