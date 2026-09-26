@@ -5,6 +5,9 @@
 //! product backend/export policy decisions. Diagnostics go to stderr as JSON.
 
 #![forbid(unsafe_code)]
+// House style intentionally requires explicit `return` in named Rust functions.
+// Keep every other Clippy warning denied by CI; exempt only that conflicting lint.
+#![allow(clippy::needless_return)]
 
 pub mod adapters;
 pub mod apm;
