@@ -59,9 +59,11 @@ pub struct LifecycleRecord {
 pub enum LifecycleRecordError {
     EmptyWorkloadId,
     EmptyAssignedNode,
+    InvalidCheckpoint,
     ZeroPlacementEpoch,
     ZeroFencingToken,
     ZeroRevision,
+    WorkloadChanged,
     StaleFencingToken,
     RevisionDidNotAdvance,
     PlacementEpochRegressed,
@@ -90,6 +92,15 @@ impl LifecycleRecord {
 
         if self.revision == 0 {
             return Err(LifecycleRecordError::ZeroRevision);
+        }
+
+        if let Some(checkpoint) = &self.checkpoint {
+            if checkpoint.artifact_ref.is_empty()
+                || checkpoint.digest.is_empty()
+                || checkpoint.format.is_empty()
+            {
+                return Err(LifecycleRecordError::InvalidCheckpoint);
+            }
         }
 
         match self.state {
@@ -140,6 +151,10 @@ pub fn validate_record_update(
     current.validate()?;
     next.validate()?;
 
+    if next.workload_id != current.workload_id {
+        return Err(LifecycleRecordError::WorkloadChanged);
+    }
+
     if next.fencing_token < current.fencing_token {
         return Err(LifecycleRecordError::StaleFencingToken);
     }
@@ -188,6 +203,20 @@ mod tests {
         assert_eq!(
             validate_record_update(&current, &next),
             Err(LifecycleRecordError::StaleFencingToken)
+        );
+    }
+
+    #[test]
+    fn workload_identity_cannot_change_in_place() {
+        let current = record();
+        let mut next = current.clone();
+        next.workload_id = "tenant-99-shard-1".to_owned();
+        next.fencing_token = 20;
+        next.revision = 12;
+
+        assert_eq!(
+            validate_record_update(&current, &next),
+            Err(LifecycleRecordError::WorkloadChanged)
         );
     }
 
