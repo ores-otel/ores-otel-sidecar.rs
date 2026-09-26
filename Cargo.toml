@@ -27,3 +27,9 @@ time = "=0.3.47"
 
 [lints.rust]
 unsafe_code = "forbid"
+
+[lints.clippy]
+# ORE Rust style requires explicit return statements for named function/method
+# return values. Keep that contract even though Clippy normally prefers final
+# expressions in expression-oriented Rust.
+needless_return = "allow"
