@@ -27,6 +27,7 @@ pub mod identity;
 pub mod log;
 pub mod probe;
 pub mod process_lifecycle;
+pub mod process_lifecycle_agent;
 pub mod process_lifecycle_record;
 pub mod receiver;
 pub mod runtime;
@@ -56,6 +57,15 @@ pub use process_lifecycle::{
     LifecycleDecision as ProcessLifecycleDecision, LifecycleEvent as ProcessLifecycleEvent,
     LifecyclePolicy as ProcessLifecyclePolicy, LifecycleState as ProcessLifecycleState,
     PolicyError as ProcessLifecyclePolicyError, SuspendStrategy as ProcessSuspendStrategy,
+};
+pub use process_lifecycle_agent::{
+    reconcile_once as reconcile_process_lifecycle_once,
+    ControllerScope as ProcessLifecycleControllerScope, LifecycleEffects as ProcessLifecycleEffects,
+    LifecycleRecordStore as ProcessLifecycleRecordStore,
+    ProductLifecycleControl as ProcessLifecycleProductControl,
+    ProductQuiesceOutcome as ProcessLifecycleQuiesceOutcome,
+    ReconcileError as ProcessLifecycleReconcileError,
+    ReconcileOutcome as ProcessLifecycleReconcileOutcome,
 };
 pub use process_lifecycle_record::{
     validate_record_update as validate_process_lifecycle_record_update,
