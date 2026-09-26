@@ -87,7 +87,26 @@ fn kubelet_exec_probe_hits_loopback_and_stays_off_stdout() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn sidecar");
-    drop(connect_when_ready(port));
+
+    // A successful TCP connect only proves the kernel has published the listen
+    // socket. Complete one real health request so the single-threaded server has
+    // entered and returned from its request path before executing the next
+    // one-shot probe process. This removes a scheduler-dependent startup race in
+    // slower Docker builds without weakening the probe assertion itself.
+    let mut warmup = connect_when_ready(port);
+    warmup
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("set warmup read timeout");
+    warmup
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        .expect("write warmup health request");
+    let mut warmup_response = String::new();
+    let _ = warmup.read_to_string(&mut warmup_response);
+    assert!(
+        warmup_response.starts_with("HTTP/1.1 200 OK"),
+        "warmup response {warmup_response}"
+    );
+    drop(warmup);
 
     let probe = Command::new(env!("CARGO_BIN_EXE_ores-otel-sidecar"))
         .arg("probe")
