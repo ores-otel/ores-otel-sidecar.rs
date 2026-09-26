@@ -27,6 +27,7 @@ pub mod identity;
 pub mod log;
 pub mod probe;
 pub mod process_lifecycle;
+pub mod process_lifecycle_record;
 pub mod receiver;
 pub mod runtime;
 pub mod runtime_updates;
@@ -55,6 +56,13 @@ pub use process_lifecycle::{
     LifecycleDecision as ProcessLifecycleDecision, LifecycleEvent as ProcessLifecycleEvent,
     LifecyclePolicy as ProcessLifecyclePolicy, LifecycleState as ProcessLifecycleState,
     PolicyError as ProcessLifecyclePolicyError, SuspendStrategy as ProcessSuspendStrategy,
+};
+pub use process_lifecycle_record::{
+    validate_record_update as validate_process_lifecycle_record_update,
+    LifecycleCheckpoint as ProcessLifecycleCheckpoint, LifecycleRecord as ProcessLifecycleRecord,
+    LifecycleRecordError as ProcessLifecycleRecordError,
+    PersistedLifecycleState as PersistedProcessLifecycleState,
+    PersistedSuspendStrategy as PersistedProcessSuspendStrategy,
 };
 pub use receiver::{
     receive_all, receive_one, ReceiverError, ReceiverFrame, ReceiverLimits,
