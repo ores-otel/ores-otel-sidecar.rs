@@ -176,7 +176,7 @@ pub struct CriuController {
 
 impl Default for CriuController {
     fn default() -> Self {
-        return Self::new("criu");
+        return Self::new("/run/current-system/sw/bin/criu");
     }
 }
 
