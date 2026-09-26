@@ -10,7 +10,7 @@ use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
 use ores_locks_and_leases::{
-    AcquireOptions, Lease, LeaseGrant, LockError, LockKey, ManagedLease,
+    AcquireOptions, Lease, LeaseGrant, LockError, LockErrorKind, LockKey, ManagedLease,
 };
 
 const LOCK_PREFIX: &str = "process-lifecycle";
@@ -132,8 +132,10 @@ impl FencedLifecycleGrant {
     where
         L: Lease + Sync,
     {
-        let grant = lease.renew(&self.grant, ttl).await?;
-        return Ok(Self { grant });
+        let previous = self.grant;
+        let renewed = lease.renew(&previous, ttl).await?;
+        validate_renewed_grant(&previous, &renewed)?;
+        return Ok(Self { grant: renewed });
     }
 
     /// Release exact ownership. `Ok(false)` means authority was already lost.
@@ -143,6 +145,24 @@ impl FencedLifecycleGrant {
     {
         return lease.release(&self.grant).await;
     }
+}
+
+fn validate_renewed_grant(
+    previous: &LeaseGrant,
+    renewed: &LeaseGrant,
+) -> Result<(), LockError> {
+    if renewed.key != previous.key
+        || renewed.holder != previous.holder
+        || renewed.fencing_token != previous.fencing_token
+    {
+        return Err(LockError::new(
+            LockErrorKind::LostLease,
+            &previous.key,
+            "lifecycle lease renewal changed key, holder, or fencing token",
+        ));
+    }
+
+    return Ok(());
 }
 
 #[derive(Debug)]
@@ -220,6 +240,27 @@ mod tests {
             scope,
             Err(LifecycleLeaseScopeError::InvalidSegment { field: "workload" })
         );
+    }
+
+    #[test]
+    fn renewed_grant_must_preserve_exact_fenced_identity() {
+        let key = LockKey::new("process-lifecycle/beamscale/prod/workload").unwrap();
+        let previous = LeaseGrant {
+            key: key.clone(),
+            holder: "host-a-transition-1".to_owned(),
+            fencing_token: 41,
+            lease_expires_ms: Some(1000),
+            ttl_ms: 500,
+        };
+        let mut changed = previous.clone();
+        changed.fencing_token = 42;
+
+        let error = validate_renewed_grant(&previous, &changed).unwrap_err();
+        assert_eq!(error.kind, LockErrorKind::LostLease);
+
+        let mut extended = previous.clone();
+        extended.lease_expires_ms = Some(1500);
+        assert_eq!(validate_renewed_grant(&previous, &extended), Ok(()));
     }
 
     #[test]
