@@ -5,35 +5,62 @@
 //! then calls [`reconcile_once`] with that fencing token. This keeps Cloudflare
 //! Durable Objects, Fiducia, and future BeamScale-native lease authorities behind
 //! one interchangeable seam while making effect ordering independently testable.
+//!
+//! A hostile tenant may control its entire runtime process. Therefore tenant
+//! runtime messages are never authoritative for queue demand, in-flight work,
+//! process identity, isolation, or post-wake admission. Those facts come from
+//! trusted host/control-plane adapters outside the managed workload boundary.
 
 #![forbid(unsafe_code)]
 
 use crate::process_lifecycle::{
-    decide, ActivitySnapshot, LifecycleAction, LifecycleEvent, LifecyclePolicy, LifecycleState,
-    SuspendStrategy,
+    ActivitySnapshot, LifecycleAction, LifecycleEvent, LifecyclePolicy, LifecycleState,
+    SuspendStrategy, decide,
 };
 use crate::process_lifecycle_record::{
-    validate_record_update, LifecycleCheckpoint, LifecycleRecord, PersistedLifecycleState,
-    PersistedSuspendStrategy,
+    LifecycleCheckpoint, LifecycleRecord, PersistedLifecycleState, PersistedSuspendStrategy,
+    validate_record_update,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProductQuiesceOutcome {
+    /// The cooperative product runtime reports that its local drain completed.
+    /// The host must still re-observe trusted demand before a process effect.
     Drained,
+    /// The cooperative product runtime observed new local demand while draining.
     DemandReturned,
 }
 
-/// Product-specific runtime boundary. Implementations own their local opaque
-/// quiesce handle (Erlang refs/PIDs must never cross the process boundary).
+/// Trusted host/control-plane demand observation.
 ///
-/// The controller calls these methods serially from one host reconciliation
-/// loop. Mutable receivers make that single-owner sequencing explicit and let
-/// adapters keep opaque local session state without global/interior mutability.
-pub trait ProductLifecycleControl {
+/// Implementations must live outside the tenant-controlled runtime and derive
+/// queue depth, assigned/in-flight work, and idle duration from trusted scheduler,
+/// queue, dispatch-lease, or host-agent state. A tenant BEAM/process must never
+/// implement this authority for its own lifecycle decision.
+pub trait HostDemandObservation {
     fn observe(&mut self) -> Result<ActivitySnapshot, String>;
+}
+
+/// Product-specific cooperative runtime boundary.
+///
+/// A hostile tenant may compromise this implementation because it can run inside
+/// the tenant BEAM/process. Quiesce therefore improves consistency and wake
+/// latency but is not itself a security or lifecycle-authority proof. Erlang
+/// references/PIDs remain process-local and must never cross this boundary.
+pub trait ProductLifecycleControl {
     fn quiesce(&mut self) -> Result<ProductQuiesceOutcome, String>;
     fn cancel_quiesce(&mut self) -> Result<(), String>;
-    fn ensure_ready(&mut self) -> Result<(), String>;
+}
+
+/// Trusted post-wake admission verification.
+///
+/// Implementations run outside the tenant runtime and must bind the observed
+/// process identity to the expected managed scope/cgroup/runtime epoch before
+/// returning success. For the hostile-process class this is where namespace,
+/// no-new-privileges, zero-capability, process-start, cgroup, and product routing
+/// invariants are re-established before durable state becomes `running`.
+pub trait RuntimeAdmissionVerifier {
+    fn verify_ready(&mut self) -> Result<(), String>;
 }
 
 /// Durable compare-and-set record boundary. Implementations must make replace
@@ -76,7 +103,9 @@ pub enum ReconcileOutcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReconcileError {
     Record(String),
+    Observation(String),
     Product(String),
+    Admission(String),
     Effect(String),
     InvalidRecord,
     StalePlacement,
@@ -94,17 +123,21 @@ pub enum ReconcileError {
 /// Transitional process-effect states (`freezing`, `checkpointing`, `thawing`,
 /// `restoring`) are deliberately not replayed here because crash recovery must
 /// compare the durable intent with observed cgroup/process/checkpoint reality.
-pub fn reconcile_once<S, P, E>(
+pub fn reconcile_once<S, D, P, A, E>(
     scope: &ControllerScope,
     fencing_token: u64,
     policy: LifecyclePolicy,
     store: &mut S,
+    demand: &mut D,
     product: &mut P,
+    admission: &mut A,
     effects: &mut E,
 ) -> Result<ReconcileOutcome, ReconcileError>
 where
     S: LifecycleRecordStore,
+    D: HostDemandObservation,
     P: ProductLifecycleControl,
+    A: RuntimeAdmissionVerifier,
     E: LifecycleEffects,
 {
     let current = store
@@ -131,7 +164,7 @@ where
         }
     }
 
-    let activity = product.observe().map_err(ReconcileError::Product)?;
+    let activity = demand.observe().map_err(ReconcileError::Observation)?;
     let state = to_policy_state(&current);
     let decision = decide(state, policy, LifecycleEvent::Observe(activity))
         .map_err(|_error| ReconcileError::InvalidTransition)?;
@@ -146,15 +179,16 @@ where
                 policy,
                 current,
                 store,
+                demand,
                 product,
                 effects,
             );
         }
         LifecycleAction::Thaw => {
-            return resume_frozen(fencing_token, current, store, product, effects);
+            return resume_frozen(fencing_token, current, store, admission, effects);
         }
         LifecycleAction::Restore => {
-            return restore_hibernated(fencing_token, current, store, product, effects);
+            return restore_hibernated(fencing_token, current, store, admission, effects);
         }
         LifecycleAction::CancelQuiesce
         | LifecycleAction::Freeze
@@ -187,16 +221,18 @@ where
     return Ok(ReconcileOutcome::RecoveredQuiesce);
 }
 
-fn suspend_from_running<S, P, E>(
+fn suspend_from_running<S, D, P, E>(
     fencing_token: u64,
     policy: LifecyclePolicy,
     current: LifecycleRecord,
     store: &mut S,
+    demand: &mut D,
     product: &mut P,
     effects: &mut E,
 ) -> Result<ReconcileOutcome, ReconcileError>
 where
     S: LifecycleRecordStore,
+    D: HostDemandObservation,
     P: ProductLifecycleControl,
     E: LifecycleEffects,
 {
@@ -210,19 +246,17 @@ where
 
     match product.quiesce().map_err(ReconcileError::Product)? {
         ProductQuiesceOutcome::DemandReturned => {
-            product
-                .cancel_quiesce()
-                .map_err(ReconcileError::Product)?;
-            let running = next_record(
-                &quiescing,
-                fencing_token,
-                PersistedLifecycleState::Running,
-                None,
-            );
-            persist(store, &quiescing, &running)?;
-            return Ok(ReconcileOutcome::DemandCancelledSuspend);
+            return cancel_suspend_for_demand(fencing_token, quiescing, store, product);
         }
         ProductQuiesceOutcome::Drained => {}
+    }
+
+    // A tenant-controlled runtime can lie about its own drain state. Re-observe
+    // demand from the trusted host/control-plane authority after the cooperative
+    // quiesce and immediately before committing a process-effect intent.
+    let after_quiesce_activity = demand.observe().map_err(ReconcileError::Observation)?;
+    if after_quiesce_activity.has_demand() {
+        return cancel_suspend_for_demand(fencing_token, quiescing, store, product);
     }
 
     let after_quiesce = decide(
@@ -281,16 +315,39 @@ where
     }
 }
 
-fn resume_frozen<S, P, E>(
+fn cancel_suspend_for_demand<S, P>(
     fencing_token: u64,
-    current: LifecycleRecord,
+    quiescing: LifecycleRecord,
     store: &mut S,
     product: &mut P,
-    effects: &mut E,
 ) -> Result<ReconcileOutcome, ReconcileError>
 where
     S: LifecycleRecordStore,
     P: ProductLifecycleControl,
+{
+    product
+        .cancel_quiesce()
+        .map_err(ReconcileError::Product)?;
+    let running = next_record(
+        &quiescing,
+        fencing_token,
+        PersistedLifecycleState::Running,
+        None,
+    );
+    persist(store, &quiescing, &running)?;
+    return Ok(ReconcileOutcome::DemandCancelledSuspend);
+}
+
+fn resume_frozen<S, A, E>(
+    fencing_token: u64,
+    current: LifecycleRecord,
+    store: &mut S,
+    admission: &mut A,
+    effects: &mut E,
+) -> Result<ReconcileOutcome, ReconcileError>
+where
+    S: LifecycleRecordStore,
+    A: RuntimeAdmissionVerifier,
     E: LifecycleEffects,
 {
     let thawing = next_record(
@@ -301,7 +358,9 @@ where
     );
     persist(store, &current, &thawing)?;
     effects.thaw().map_err(ReconcileError::Effect)?;
-    product.ensure_ready().map_err(ReconcileError::Product)?;
+    admission
+        .verify_ready()
+        .map_err(ReconcileError::Admission)?;
     let running = next_record(
         &thawing,
         fencing_token,
@@ -312,16 +371,16 @@ where
     return Ok(ReconcileOutcome::Resumed);
 }
 
-fn restore_hibernated<S, P, E>(
+fn restore_hibernated<S, A, E>(
     fencing_token: u64,
     current: LifecycleRecord,
     store: &mut S,
-    product: &mut P,
+    admission: &mut A,
     effects: &mut E,
 ) -> Result<ReconcileOutcome, ReconcileError>
 where
     S: LifecycleRecordStore,
-    P: ProductLifecycleControl,
+    A: RuntimeAdmissionVerifier,
     E: LifecycleEffects,
 {
     let checkpoint = current
@@ -338,7 +397,9 @@ where
     effects
         .restore(&checkpoint)
         .map_err(ReconcileError::Effect)?;
-    product.ensure_ready().map_err(ReconcileError::Product)?;
+    admission
+        .verify_ready()
+        .map_err(ReconcileError::Admission)?;
     let running = next_record(
         &restoring,
         fencing_token,
@@ -355,9 +416,7 @@ fn persist<S: LifecycleRecordStore>(
     next: &LifecycleRecord,
 ) -> Result<(), ReconcileError> {
     validate_record_update(current, next).map_err(|_error| ReconcileError::InvalidRecord)?;
-    return store
-        .replace(current, next)
-        .map_err(ReconcileError::Record);
+    return store.replace(current, next).map_err(ReconcileError::Record);
 }
 
 fn validate_authority(
