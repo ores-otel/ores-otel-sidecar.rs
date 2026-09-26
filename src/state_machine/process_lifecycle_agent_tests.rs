@@ -70,8 +70,8 @@ impl LifecycleEffects for FakeEffects {
 
     fn checkpoint_and_terminate(&mut self) -> Result<LifecycleCheckpoint, String> {
         return Ok(LifecycleCheckpoint {
-            artifact_ref: "checkpoint://workload/sha256:abc".to_owned(),
-            digest: "sha256:abc".to_owned(),
+            artifact_ref: "checkpoint://workload/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             format: "criu-v1".to_owned(),
         });
     }
