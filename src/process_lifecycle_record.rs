@@ -8,6 +8,9 @@
 
 use serde::{Deserialize, Serialize};
 
+const MAX_CHECKPOINT_ARTIFACT_REF_BYTES: usize = 2_048;
+const MAX_CHECKPOINT_FORMAT_BYTES: usize = 128;
+
 /// Persisted lifecycle states use explicit stable wire names rather than Rust
 /// enum layout or debug formatting.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -61,6 +64,8 @@ pub enum LifecycleRecordError {
     EmptyWorkloadId,
     EmptyAssignedNode,
     InvalidCheckpoint,
+    InvalidCheckpointDigest,
+    StateStrategyMismatch,
     ZeroPlacementEpoch,
     ZeroFencingToken,
     ZeroRevision,
@@ -97,29 +102,55 @@ impl LifecycleRecord {
 
         if let Some(checkpoint) = &self.checkpoint {
             if checkpoint.artifact_ref.is_empty()
-                || checkpoint.digest.is_empty()
+                || checkpoint.artifact_ref.len() > MAX_CHECKPOINT_ARTIFACT_REF_BYTES
+                || checkpoint.artifact_ref.chars().any(char::is_control)
                 || checkpoint.format.is_empty()
+                || checkpoint.format.len() > MAX_CHECKPOINT_FORMAT_BYTES
+                || checkpoint.format.chars().any(char::is_control)
             {
                 return Err(LifecycleRecordError::InvalidCheckpoint);
+            }
+
+            if !valid_checkpoint_digest(&checkpoint.digest) {
+                return Err(LifecycleRecordError::InvalidCheckpointDigest);
             }
         }
 
         match self.state {
             PersistedLifecycleState::Hibernated | PersistedLifecycleState::Restoring => {
+                if self.strategy != PersistedSuspendStrategy::Hibernate {
+                    return Err(LifecycleRecordError::StateStrategyMismatch);
+                }
+
                 if self.checkpoint.is_none() {
                     return Err(LifecycleRecordError::CheckpointRequired);
                 }
             }
-            PersistedLifecycleState::Running
-            | PersistedLifecycleState::Quiescing
-            | PersistedLifecycleState::Freezing
-            | PersistedLifecycleState::Frozen
-            | PersistedLifecycleState::Thawing => {
+            PersistedLifecycleState::Checkpointing => {
+                if self.strategy != PersistedSuspendStrategy::Hibernate {
+                    return Err(LifecycleRecordError::StateStrategyMismatch);
+                }
+
                 if self.checkpoint.is_some() {
                     return Err(LifecycleRecordError::CheckpointNotAllowed);
                 }
             }
-            PersistedLifecycleState::Checkpointing => {}
+            PersistedLifecycleState::Freezing
+            | PersistedLifecycleState::Frozen
+            | PersistedLifecycleState::Thawing => {
+                if self.strategy != PersistedSuspendStrategy::Freeze {
+                    return Err(LifecycleRecordError::StateStrategyMismatch);
+                }
+
+                if self.checkpoint.is_some() {
+                    return Err(LifecycleRecordError::CheckpointNotAllowed);
+                }
+            }
+            PersistedLifecycleState::Running | PersistedLifecycleState::Quiescing => {
+                if self.checkpoint.is_some() {
+                    return Err(LifecycleRecordError::CheckpointNotAllowed);
+                }
+            }
         }
 
         return Ok(());
@@ -138,6 +169,17 @@ impl LifecycleRecord {
             && self.placement_epoch == placement_epoch
             && self.fencing_token == fencing_token;
     }
+}
+
+fn valid_checkpoint_digest(value: &str) -> bool {
+    let Some(raw) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+
+    return raw.len() == 64
+        && raw
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase());
 }
 
 /// Validate an atomic compare-and-set replacement of one lifecycle record.
@@ -197,8 +239,8 @@ mod tests {
 
     fn checkpoint() -> LifecycleCheckpoint {
         return LifecycleCheckpoint {
-            artifact_ref: "checkpoint://tenant-42-shard-3/sha256:abc".to_owned(),
-            digest: "sha256:abc".to_owned(),
+            artifact_ref: "checkpoint://tenant-42-shard-3/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             format: "criu-v1".to_owned(),
         };
     }
@@ -292,6 +334,58 @@ mod tests {
         assert_eq!(value.validate(), Ok(()));
 
         value.checkpoint = Some(checkpoint());
+        assert_eq!(
+            value.validate(),
+            Err(LifecycleRecordError::CheckpointNotAllowed)
+        );
+    }
+
+    #[test]
+    fn state_and_strategy_must_match() {
+        let mut value = record();
+        value.state = PersistedLifecycleState::Hibernated;
+        value.checkpoint = Some(checkpoint());
+
+        assert_eq!(
+            value.validate(),
+            Err(LifecycleRecordError::StateStrategyMismatch)
+        );
+
+        value.strategy = PersistedSuspendStrategy::Hibernate;
+        assert_eq!(value.validate(), Ok(()));
+
+        value.state = PersistedLifecycleState::Frozen;
+        value.checkpoint = None;
+        assert_eq!(
+            value.validate(),
+            Err(LifecycleRecordError::StateStrategyMismatch)
+        );
+    }
+
+    #[test]
+    fn checkpoint_digest_must_be_canonical_sha256() {
+        let mut value = record();
+        value.state = PersistedLifecycleState::Hibernated;
+        value.strategy = PersistedSuspendStrategy::Hibernate;
+        value.checkpoint = Some(LifecycleCheckpoint {
+            artifact_ref: "checkpoint://tenant-42-shard-3/object".to_owned(),
+            digest: "sha256:abc".to_owned(),
+            format: "criu-v1".to_owned(),
+        });
+
+        assert_eq!(
+            value.validate(),
+            Err(LifecycleRecordError::InvalidCheckpointDigest)
+        );
+    }
+
+    #[test]
+    fn checkpointing_record_cannot_publish_checkpoint_metadata_early() {
+        let mut value = record();
+        value.state = PersistedLifecycleState::Checkpointing;
+        value.strategy = PersistedSuspendStrategy::Hibernate;
+        value.checkpoint = Some(checkpoint());
+
         assert_eq!(
             value.validate(),
             Err(LifecycleRecordError::CheckpointNotAllowed)
