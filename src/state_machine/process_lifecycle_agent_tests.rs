@@ -23,12 +23,14 @@ impl LifecycleRecordStore for MemoryStore {
     }
 }
 
-struct FakeDemand {
+struct FakeHost {
     observations: Vec<ActivitySnapshot>,
     cursor: usize,
+    ready: bool,
+    verified: bool,
 }
 
-impl HostDemandObservation for FakeDemand {
+impl HostLifecycleControl for FakeHost {
     fn observe(&mut self) -> Result<ActivitySnapshot, String> {
         let observation = self
             .observations
@@ -38,6 +40,15 @@ impl HostDemandObservation for FakeDemand {
             .ok_or_else(|| "missing trusted demand observation".to_owned())?;
         self.cursor = self.cursor.saturating_add(1);
         return Ok(observation);
+    }
+
+    fn verify_ready(&mut self) -> Result<(), String> {
+        self.verified = true;
+        if self.ready {
+            return Ok(());
+        }
+
+        return Err("host admission verification failed".to_owned());
     }
 }
 
@@ -54,22 +65,6 @@ impl ProductLifecycleControl for FakeProduct {
     fn cancel_quiesce(&mut self) -> Result<(), String> {
         self.cancelled = true;
         return Ok(());
-    }
-}
-
-struct FakeAdmission {
-    ready: bool,
-    verified: bool,
-}
-
-impl RuntimeAdmissionVerifier for FakeAdmission {
-    fn verify_ready(&mut self) -> Result<(), String> {
-        self.verified = true;
-        if self.ready {
-            return Ok(());
-        }
-
-        return Err("host admission verification failed".to_owned());
     }
 }
 
@@ -149,28 +144,23 @@ const fn demand_activity() -> ActivitySnapshot {
     };
 }
 
-fn demand_with(observations: Vec<ActivitySnapshot>) -> FakeDemand {
-    return FakeDemand {
+fn host_with(observations: Vec<ActivitySnapshot>) -> FakeHost {
+    return FakeHost {
         observations,
         cursor: 0,
+        ready: true,
+        verified: false,
     };
 }
 
-fn idle_demand() -> FakeDemand {
-    return demand_with(vec![idle_activity(), idle_activity()]);
+fn idle_host() -> FakeHost {
+    return host_with(vec![idle_activity(), idle_activity()]);
 }
 
 fn product(quiesce: ProductQuiesceOutcome) -> FakeProduct {
     return FakeProduct {
         quiesce,
         cancelled: false,
-    };
-}
-
-fn ready_admission() -> FakeAdmission {
-    return FakeAdmission {
-        ready: true,
-        verified: false,
     };
 }
 
@@ -187,9 +177,8 @@ fn idle_freeze_persists_intents_before_effect_completion() {
             None,
         ),
     };
-    let mut demand = idle_demand();
+    let mut host = idle_host();
     let mut product = product(ProductQuiesceOutcome::Drained);
-    let mut admission = ready_admission();
     let mut effects = unfrozen_effects();
 
     let outcome = reconcile_once(
@@ -197,9 +186,8 @@ fn idle_freeze_persists_intents_before_effect_completion() {
         10,
         freeze_policy(),
         &mut store,
-        &mut demand,
+        &mut host,
         &mut product,
-        &mut admission,
         &mut effects,
     );
 
@@ -218,9 +206,8 @@ fn tenant_drained_claim_cannot_override_trusted_returned_demand() {
             None,
         ),
     };
-    let mut demand = demand_with(vec![idle_activity(), demand_activity()]);
+    let mut host = host_with(vec![idle_activity(), demand_activity()]);
     let mut product = product(ProductQuiesceOutcome::Drained);
-    let mut admission = ready_admission();
     let mut effects = unfrozen_effects();
 
     let outcome = reconcile_once(
@@ -228,9 +215,8 @@ fn tenant_drained_claim_cannot_override_trusted_returned_demand() {
         10,
         freeze_policy(),
         &mut store,
-        &mut demand,
+        &mut host,
         &mut product,
-        &mut admission,
         &mut effects,
     );
 
@@ -249,9 +235,8 @@ fn cooperative_demand_return_during_quiesce_leaves_workload_running() {
             None,
         ),
     };
-    let mut demand = idle_demand();
+    let mut host = idle_host();
     let mut product = product(ProductQuiesceOutcome::DemandReturned);
-    let mut admission = ready_admission();
     let mut effects = unfrozen_effects();
 
     let outcome = reconcile_once(
@@ -259,9 +244,8 @@ fn cooperative_demand_return_during_quiesce_leaves_workload_running() {
         10,
         freeze_policy(),
         &mut store,
-        &mut demand,
+        &mut host,
         &mut product,
-        &mut admission,
         &mut effects,
     );
 
@@ -280,9 +264,8 @@ fn frozen_trusted_demand_thaws_then_requires_host_admission() {
             None,
         ),
     };
-    let mut demand = demand_with(vec![demand_activity()]);
+    let mut host = host_with(vec![demand_activity()]);
     let mut product = product(ProductQuiesceOutcome::Drained);
-    let mut admission = ready_admission();
     let mut effects = FakeEffects { frozen: true };
 
     let outcome = reconcile_once(
@@ -290,16 +273,15 @@ fn frozen_trusted_demand_thaws_then_requires_host_admission() {
         10,
         freeze_policy(),
         &mut store,
-        &mut demand,
+        &mut host,
         &mut product,
-        &mut admission,
         &mut effects,
     );
 
     assert_eq!(outcome, Ok(ReconcileOutcome::Resumed));
     assert_eq!(store.record.state, PersistedLifecycleState::Running);
     assert!(!effects.frozen);
-    assert!(admission.verified);
+    assert!(host.verified);
 }
 
 #[test]
@@ -311,12 +293,9 @@ fn failed_host_admission_never_publishes_running_after_thaw() {
             None,
         ),
     };
-    let mut demand = demand_with(vec![demand_activity()]);
+    let mut host = host_with(vec![demand_activity()]);
+    host.ready = false;
     let mut product = product(ProductQuiesceOutcome::Drained);
-    let mut admission = FakeAdmission {
-        ready: false,
-        verified: false,
-    };
     let mut effects = FakeEffects { frozen: true };
 
     let outcome = reconcile_once(
@@ -324,21 +303,20 @@ fn failed_host_admission_never_publishes_running_after_thaw() {
         10,
         freeze_policy(),
         &mut store,
-        &mut demand,
+        &mut host,
         &mut product,
-        &mut admission,
         &mut effects,
     );
 
     assert_eq!(
         outcome,
-        Err(ReconcileError::Admission(
+        Err(ReconcileError::Host(
             "host admission verification failed".to_owned()
         ))
     );
     assert_eq!(store.record.state, PersistedLifecycleState::Thawing);
     assert!(!effects.frozen);
-    assert!(admission.verified);
+    assert!(host.verified);
 }
 
 #[test]
@@ -350,9 +328,8 @@ fn persisted_quiesce_is_cancelled_under_the_current_fence() {
             None,
         ),
     };
-    let mut demand = idle_demand();
+    let mut host = idle_host();
     let mut product = product(ProductQuiesceOutcome::Drained);
-    let mut admission = ready_admission();
     let mut effects = unfrozen_effects();
 
     let outcome = reconcile_once(
@@ -360,9 +337,8 @@ fn persisted_quiesce_is_cancelled_under_the_current_fence() {
         10,
         freeze_policy(),
         &mut store,
-        &mut demand,
+        &mut host,
         &mut product,
-        &mut admission,
         &mut effects,
     );
 
@@ -381,9 +357,8 @@ fn policy_strategy_must_match_the_durable_record() {
             None,
         ),
     };
-    let mut demand = idle_demand();
+    let mut host = idle_host();
     let mut product = product(ProductQuiesceOutcome::Drained);
-    let mut admission = ready_admission();
     let mut effects = unfrozen_effects();
 
     assert_eq!(
@@ -392,9 +367,8 @@ fn policy_strategy_must_match_the_durable_record() {
             10,
             freeze_policy(),
             &mut store,
-            &mut demand,
+            &mut host,
             &mut product,
-            &mut admission,
             &mut effects,
         ),
         Err(ReconcileError::InvalidRecord)
@@ -410,9 +384,8 @@ fn transitional_state_requires_crash_recovery_path() {
             None,
         ),
     };
-    let mut demand = idle_demand();
+    let mut host = idle_host();
     let mut product = product(ProductQuiesceOutcome::Drained);
-    let mut admission = ready_admission();
     let mut effects = unfrozen_effects();
 
     assert_eq!(
@@ -421,9 +394,8 @@ fn transitional_state_requires_crash_recovery_path() {
             10,
             freeze_policy(),
             &mut store,
-            &mut demand,
+            &mut host,
             &mut product,
-            &mut admission,
             &mut effects,
         ),
         Err(ReconcileError::RecoveryRequired(
