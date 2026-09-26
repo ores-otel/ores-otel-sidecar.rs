@@ -87,9 +87,9 @@ fn validate_segment(
 ) -> Result<(), LifecycleLeaseScopeError> {
     let valid = !value.is_empty()
         && value.len() <= MAX_SEGMENT_BYTES
-        && value.bytes().all(|byte| {
-            return byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':');
-        });
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'));
 
     if !valid {
         return Err(LifecycleLeaseScopeError::InvalidSegment { field });
@@ -202,18 +202,18 @@ mod tests {
 
     #[test]
     fn scope_derives_stable_lock_key() {
-        let scope = LifecycleLeaseScope::new(
+        let key = LifecycleLeaseScope::new(
             "beamscale",
             "prod-us-east",
             "node-17",
             "tenant-42",
         )
-        .expect("valid scope");
-        let key = scope.lock_key().expect("valid lock key");
+        .and_then(|scope| scope.lock_key())
+        .map(|key| key.as_str().to_owned());
 
         assert_eq!(
-            key.as_str(),
-            "process-lifecycle/beamscale/prod-us-east/node-17/tenant-42"
+            key,
+            Ok("process-lifecycle/beamscale/prod-us-east/node-17/tenant-42".to_owned())
         );
     }
 
