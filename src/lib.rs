@@ -22,6 +22,7 @@ mod http_impl;
 pub mod identity;
 pub mod log;
 pub mod probe;
+pub mod process_lifecycle;
 pub mod receiver;
 pub mod runtime;
 pub mod runtime_updates;
@@ -44,6 +45,13 @@ pub use health::Health;
 pub use hooks::{DefaultOverrides, SidecarHooks, SidecarOverrides};
 pub use identity::{SidecarEnv, SidecarIdentity};
 pub use probe::{NoopProbe, ProductProbe};
+pub use process_lifecycle::{
+    decide as decide_process_lifecycle, ActivitySnapshot as ProcessActivitySnapshot,
+    InvalidTransition as InvalidProcessLifecycleTransition, LifecycleAction as ProcessLifecycleAction,
+    LifecycleDecision as ProcessLifecycleDecision, LifecycleEvent as ProcessLifecycleEvent,
+    LifecyclePolicy as ProcessLifecyclePolicy, LifecycleState as ProcessLifecycleState,
+    PolicyError as ProcessLifecyclePolicyError, SuspendStrategy as ProcessSuspendStrategy,
+};
 pub use receiver::{
     receive_all, receive_one, ReceiverError, ReceiverFrame, ReceiverLimits,
     DEFAULT_MAX_DATA_CHUNK_BYTES, DEFAULT_MAX_METADATA_LINE_BYTES,
