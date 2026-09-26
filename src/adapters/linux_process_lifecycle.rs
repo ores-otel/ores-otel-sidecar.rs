@@ -195,12 +195,12 @@ impl CriuController {
         root_pid: u32,
         images_dir: &Path,
     ) -> Result<(), CriuLifecycleError> {
-        self.validate_binary()?;
+        let binary = self.validated_binary()?;
         if root_pid == 0 {
             return Err(CriuLifecycleError::InvalidRootPid);
         }
         prepare_private_checkpoint_directory(images_dir, true)?;
-        let status = Command::new(&self.binary)
+        let status = Command::new(&binary)
             .arg("dump")
             .arg("--tree")
             .arg(root_pid.to_string())
@@ -231,7 +231,7 @@ impl CriuController {
         images_dir: &Path,
         pid_file: &Path,
     ) -> Result<u32, CriuLifecycleError> {
-        self.validate_binary()?;
+        let binary = self.validated_binary()?;
         prepare_private_checkpoint_directory(images_dir, false)?;
         match fs::remove_file(pid_file) {
             Ok(()) => {}
@@ -239,7 +239,7 @@ impl CriuController {
             Err(error) => return Err(CriuLifecycleError::Io(error)),
         }
 
-        let status = Command::new(&self.binary)
+        let status = Command::new(&binary)
             .arg("restore")
             .arg("--images-dir")
             .arg(images_dir)
@@ -273,17 +273,21 @@ impl CriuController {
         return Ok(pid);
     }
 
-    fn validate_binary(&self) -> Result<(), CriuLifecycleError> {
+    fn validated_binary(&self) -> Result<PathBuf, CriuLifecycleError> {
         if !self.binary.is_absolute() {
             return Err(CriuLifecycleError::NonAbsoluteBinary);
         }
 
-        let metadata = fs::symlink_metadata(&self.binary).map_err(CriuLifecycleError::Io)?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
+        // NixOS exposes tools under /run/current-system/sw/bin as symlinks into
+        // the immutable store. Resolve that indirection once and execute the
+        // resolved regular file instead of performing PATH lookup.
+        let resolved = fs::canonicalize(&self.binary).map_err(CriuLifecycleError::Io)?;
+        let metadata = fs::metadata(&resolved).map_err(CriuLifecycleError::Io)?;
+        if !metadata.is_file() {
             return Err(CriuLifecycleError::InvalidBinary);
         }
 
-        return Ok(());
+        return Ok(resolved);
     }
 }
 
@@ -391,7 +395,7 @@ mod tests {
     #[test]
     fn criu_requires_absolute_binary_path() {
         let controller = CriuController::new("criu");
-        let result = controller.validate_binary();
+        let result = controller.validated_binary();
 
         assert!(matches!(result, Err(CriuLifecycleError::NonAbsoluteBinary)));
     }
