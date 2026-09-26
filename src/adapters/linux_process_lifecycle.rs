@@ -275,9 +275,11 @@ mod tests {
     #[test]
     fn parses_cgroup_v2_status() {
         let input = "populated 1\nfrozen 0\n";
+        let populated = parse_event_flag(input, "populated");
+        let frozen = parse_event_flag(input, "frozen");
 
-        assert_eq!(parse_event_flag(input, "populated"), Ok(true));
-        assert_eq!(parse_event_flag(input, "frozen"), Ok(false));
+        assert!(matches!(populated, Ok(true)));
+        assert!(matches!(frozen, Ok(false)));
     }
 
     #[test]
