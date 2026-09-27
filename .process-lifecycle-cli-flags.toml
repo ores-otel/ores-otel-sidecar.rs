@@ -1,0 +1,101 @@
+# flags-2-env surface for `ores-process-lifecycle-agent`
+[help]
+url = "https://github.com/ores-otel/ores-otel-sidecar.rs"
+columns = ["options", "env", "type", "default", "description"]
+
+[env]
+load = false
+files = []
+
+[parse]
+allow_unknown = false
+command_env = "ORES_PROCESS_LIFECYCLE_COMMAND"
+
+[flags.product]
+env = "ORES_PROCESS_LIFECYCLE_PRODUCT"
+aliases = ["product"]
+type = "string"
+default = ""
+help = "Product adapter identity: beamscale or scintilla-run."
+
+[flags.cluster]
+env = "ORES_PROCESS_LIFECYCLE_CLUSTER"
+aliases = ["cluster"]
+type = "string"
+default = ""
+help = "Stable deployment/fleet cluster identity used in lifecycle lease keys."
+
+[flags.node]
+env = "ORES_PROCESS_LIFECYCLE_NODE"
+aliases = ["node"]
+type = "string"
+default = ""
+help = "Current host/controller identity; never part of the logical workload lock key."
+
+[flags.state-root]
+env = "ORES_PROCESS_LIFECYCLE_STATE_ROOT"
+aliases = ["state-root"]
+type = "string"
+default = ""
+help = "Root-owned durable local lifecycle state directory."
+
+[flags.checkpoint-root]
+env = "ORES_PROCESS_LIFECYCLE_CHECKPOINT_ROOT"
+aliases = ["checkpoint-root"]
+type = "string"
+default = ""
+help = "Root-owned CRIU checkpoint staging root."
+
+[flags.cgroup-root]
+env = "ORES_PROCESS_LIFECYCLE_CGROUP_ROOT"
+aliases = ["cgroup-root"]
+type = "string"
+default = ""
+help = "Dedicated managed workload cgroup-v2 subtree."
+
+[flags.product-socket]
+env = "ORES_PROCESS_LIFECYCLE_PRODUCT_SOCKET"
+aliases = ["product-socket"]
+type = "string"
+default = ""
+help = "Fixed product-owned Unix control socket. Must match the product adapter contract."
+
+[flags.reconcile-seconds]
+env = "ORES_PROCESS_LIFECYCLE_RECONCILE_SECONDS"
+aliases = ["reconcile-seconds"]
+type = "integer"
+default = 15
+help = "Periodic reconciliation safety-net cadence in seconds."
+
+[flags.lease-backend]
+env = "ORES_PROCESS_LIFECYCLE_LEASE_BACKEND"
+aliases = ["lease-backend"]
+type = "string"
+default = "cloudflare-do"
+help = "Distributed lifecycle fence backend. v1 accepts cloudflare-do only."
+
+[flags.hibernate-enabled]
+env = "ORES_PROCESS_LIFECYCLE_HIBERNATE_ENABLED"
+aliases = ["hibernate-enabled"]
+type = "bool"
+default = false
+true_aliases = ["t", "1", "yes"]
+false_aliases = ["f", "0", "no"]
+help = "Permit checkpoint/terminate/restore only for separately certified workload classes."
+
+[flags.effects-enabled]
+env = "ORES_PROCESS_LIFECYCLE_EFFECTS_ENABLED"
+aliases = ["effects-enabled"]
+type = "bool"
+default = false
+true_aliases = ["t", "1", "yes"]
+false_aliases = ["f", "0", "no"]
+help = "Enable lifecycle mutations. Initial agent PR fails closed when true until durable store/transport wiring lands."
+
+[commands.preflight]
+env = "ORES_PROCESS_LIFECYCLE_COMMAND_PREFLIGHT"
+help = "Validate flags, authority paths, product/socket contract, and local host prerequisites without connecting or mutating."
+
+[commands.probe-product]
+env = "ORES_PROCESS_LIFECYCLE_COMMAND_PROBE_PRODUCT"
+help = "Perform one bounded read-only v1 status handshake with the cooperative product runtime."

@@ -29,6 +29,7 @@ pub mod probe;
 pub mod process_lifecycle;
 pub mod process_lifecycle_agent;
 pub mod process_lifecycle_record;
+pub mod process_lifecycle_runtime;
 pub mod receiver;
 pub mod runtime;
 pub mod runtime_updates;
@@ -60,8 +61,8 @@ pub use process_lifecycle::{
 };
 pub use process_lifecycle_agent::{
     reconcile_once as reconcile_process_lifecycle_once,
-    ControllerScope as ProcessLifecycleControllerScope, LifecycleEffects as ProcessLifecycleEffects,
-    LifecycleRecordStore as ProcessLifecycleRecordStore,
+    ControllerScope as ProcessLifecycleControllerScope, HostLifecycleControl,
+    LifecycleEffects as ProcessLifecycleEffects, LifecycleRecordStore as ProcessLifecycleRecordStore,
     ProductLifecycleControl as ProcessLifecycleProductControl,
     ProductQuiesceOutcome as ProcessLifecycleQuiesceOutcome,
     ReconcileError as ProcessLifecycleReconcileError,
@@ -73,6 +74,12 @@ pub use process_lifecycle_record::{
     LifecycleRecordError as ProcessLifecycleRecordError,
     PersistedLifecycleState as PersistedProcessLifecycleState,
     PersistedSuspendStrategy as PersistedProcessSuspendStrategy,
+};
+pub use process_lifecycle_runtime::{
+    run as run_process_lifecycle_agent, CooperativeAdmission,
+    CooperativeProductStatus, LifecycleAgentCommand, LifecycleAgentConfig,
+    LifecycleAgentInvocation, LifecycleProduct, LifecycleRuntimeError,
+    ProductControlClient, DEFAULT_LIFECYCLE_CLI_CONFIG_PATH,
 };
 pub use receiver::{
     receive_all, receive_one, ReceiverError, ReceiverFrame, ReceiverLimits,
