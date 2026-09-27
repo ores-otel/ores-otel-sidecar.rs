@@ -10,11 +10,11 @@
 
 #![forbid(unsafe_code)]
 
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::stream::{read_bounded, write_synced_new};
 use crate::process_lifecycle_agent::LifecycleRecordStore;
 use crate::process_lifecycle_record::{
     validate_record_update, LifecycleRecord, LifecycleRecordError,
@@ -81,7 +81,7 @@ impl FileLifecycleRecordStore {
     }
 
     pub fn initialize(
-        &mut self,
+        &self,
         record: &LifecycleRecord,
     ) -> Result<(), FileLifecycleRecordStoreError> {
         validate_record(record)?;
@@ -92,15 +92,14 @@ impl FileLifecycleRecordStore {
 
         let bytes = serialize_record(record)?;
         let temporary = self.write_temporary(record, &bytes)?;
-        let publish = fs::hard_link(&temporary, &canonical);
-        if let Err(error) = publish {
-            let _cleanup = fs::remove_file(&temporary);
+        if let Err(error) = fs::hard_link(&temporary, &canonical) {
+            cleanup_temporary(&temporary)?;
             if error.kind() == std::io::ErrorKind::AlreadyExists {
                 return Err(FileLifecycleRecordStoreError::AlreadyInitialized);
             }
             return Err(io_error(error));
         }
-        fs::remove_file(&temporary).map_err(io_error)?;
+        cleanup_temporary(&temporary)?;
         sync_directory(&self.records_root)?;
         let published = self.read_record(&record.workload_id)?;
         if published != *record {
@@ -128,14 +127,10 @@ impl FileLifecycleRecordStore {
             return Err(FileLifecycleRecordStoreError::RecordTooLarge);
         }
 
-        let file = File::open(&path).map_err(io_error)?;
-        let mut limited = file.take(MAX_RECORD_BYTES + 1);
-        let mut bytes = Vec::new();
-        limited.read_to_end(&mut bytes).map_err(io_error)?;
+        let bytes = read_bounded(&path, MAX_RECORD_BYTES).map_err(io_error)?;
         if bytes.len() as u64 > MAX_RECORD_BYTES {
             return Err(FileLifecycleRecordStoreError::RecordTooLarge);
         }
-
         let record = serde_json::from_slice::<LifecycleRecord>(&bytes)
             .map_err(|_error| FileLifecycleRecordStoreError::Json)?;
         validate_record(&record)?;
@@ -146,7 +141,7 @@ impl FileLifecycleRecordStore {
     }
 
     pub fn replace_record(
-        &mut self,
+        &self,
         expected: &LifecycleRecord,
         next: &LifecycleRecord,
     ) -> Result<(), FileLifecycleRecordStoreError> {
@@ -164,7 +159,7 @@ impl FileLifecycleRecordStore {
         let temporary = self.write_temporary(next, &bytes)?;
         let canonical = self.record_path(&next.workload_id)?;
         if let Err(error) = fs::rename(&temporary, &canonical) {
-            let _cleanup = fs::remove_file(&temporary);
+            cleanup_temporary(&temporary)?;
             return Err(io_error(error));
         }
         sync_directory(&self.records_root)?;
@@ -196,11 +191,7 @@ impl FileLifecycleRecordStore {
             record.revision,
             std::process::id()
         ));
-        let mut file = create_private_new_file(&path).map_err(io_error)?;
-        if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
-            let _cleanup = fs::remove_file(&path);
-            return Err(io_error(error));
-        }
+        write_synced_new(&path, bytes).map_err(io_error)?;
         return Ok(path);
     }
 }
@@ -232,7 +223,9 @@ fn validate_record(record: &LifecycleRecord) -> Result<(), FileLifecycleRecordSt
 
 fn workload_file_key(workload_id: &str) -> Result<String, FileLifecycleRecordStoreError> {
     let bytes = workload_id.as_bytes();
-    if bytes.is_empty() || bytes.len() > MAX_WORKLOAD_ID_BYTES || workload_id.chars().any(char::is_control)
+    if bytes.is_empty()
+        || bytes.len() > MAX_WORKLOAD_ID_BYTES
+        || workload_id.chars().any(char::is_control)
     {
         return Err(FileLifecycleRecordStoreError::InvalidWorkloadId);
     }
@@ -304,6 +297,10 @@ fn path_exists(path: &Path) -> Result<bool, FileLifecycleRecordStoreError> {
     };
 }
 
+fn cleanup_temporary(path: &Path) -> Result<(), FileLifecycleRecordStoreError> {
+    return fs::remove_file(path).map_err(io_error);
+}
+
 fn sync_directory(path: &Path) -> Result<(), FileLifecycleRecordStoreError> {
     return File::open(path)
         .and_then(|directory| directory.sync_all())
@@ -312,20 +309,6 @@ fn sync_directory(path: &Path) -> Result<(), FileLifecycleRecordStoreError> {
 
 fn io_error(error: std::io::Error) -> FileLifecycleRecordStoreError {
     return FileLifecycleRecordStoreError::Io(error.kind());
-}
-
-#[cfg(unix)]
-fn create_private_new_file(path: &Path) -> Result<File, std::io::Error> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true).mode(0o600);
-    return options.open(path);
-}
-
-#[cfg(not(unix))]
-fn create_private_new_file(path: &Path) -> Result<File, std::io::Error> {
-    return OpenOptions::new().write(true).create_new(true).open(path);
 }
 
 #[cfg(test)]
@@ -364,7 +347,7 @@ mod tests {
     #[test]
     fn initialize_load_and_replace_round_trip() -> Result<(), FileLifecycleRecordStoreError> {
         let root = temporary_root("round-trip")?;
-        let mut store = FileLifecycleRecordStore::open(&root)?;
+        let store = FileLifecycleRecordStore::open(&root)?;
         let initial = record(1, 5);
         store.initialize(&initial)?;
         assert_eq!(store.load_record(&initial.workload_id)?, initial);
@@ -379,7 +362,7 @@ mod tests {
     #[test]
     fn stale_compare_and_set_is_rejected() -> Result<(), FileLifecycleRecordStoreError> {
         let root = temporary_root("stale-cas")?;
-        let mut store = FileLifecycleRecordStore::open(&root)?;
+        let store = FileLifecycleRecordStore::open(&root)?;
         let initial = record(1, 5);
         let current = record(2, 6);
         let stale_next = record(2, 7);
@@ -399,15 +382,11 @@ mod tests {
     fn restart_discards_unpublished_adapter_temporary_file(
     ) -> Result<(), FileLifecycleRecordStoreError> {
         let root = temporary_root("recovery")?;
-        let mut store = FileLifecycleRecordStore::open(&root)?;
+        let store = FileLifecycleRecordStore::open(&root)?;
         let initial = record(1, 5);
         store.initialize(&initial)?;
         let orphan = store.records_root.join(format!("{TEMP_PREFIX}orphan{TEMP_SUFFIX}"));
-        let mut file = create_private_new_file(&orphan).map_err(io_error)?;
-        file.write_all(b"partial").map_err(io_error)?;
-        file.sync_all().map_err(io_error)?;
-        drop(file);
-        drop(store);
+        write_synced_new(&orphan, b"partial").map_err(io_error)?;
 
         let recovered = FileLifecycleRecordStore::open(&root)?;
         assert!(!orphan.exists());
@@ -420,9 +399,11 @@ mod tests {
     fn workload_identity_cannot_escape_record_root(
     ) -> Result<(), FileLifecycleRecordStoreError> {
         let root = temporary_root("identity")?;
-        let mut store = FileLifecycleRecordStore::open(&root)?;
-        let mut invalid = record(1, 5);
-        invalid.workload_id = "../escape".to_owned();
+        let store = FileLifecycleRecordStore::open(&root)?;
+        let invalid = LifecycleRecord {
+            workload_id: "../escape".to_owned(),
+            ..record(1, 5)
+        };
         store.initialize(&invalid)?;
 
         let records_root = root.join(RECORDS_DIRECTORY);
