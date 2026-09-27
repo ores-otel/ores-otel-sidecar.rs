@@ -36,6 +36,9 @@ pub mod runtime_updates;
 pub mod runtime_values;
 pub mod startup_env;
 
+pub use adapters::process_lifecycle_file_store::{
+    FileLifecycleRecordStore, FileLifecycleRecordStoreError,
+};
 pub use apm::{
     prometheus_text as apm_prometheus_text, FilesystemResourceSnapshot, ProcessResourceSnapshot,
     ResourceCollector, ResourceSnapshot,
@@ -76,10 +79,9 @@ pub use process_lifecycle_record::{
     PersistedSuspendStrategy as PersistedProcessSuspendStrategy,
 };
 pub use process_lifecycle_runtime::{
-    run as run_process_lifecycle_agent, CooperativeAdmission,
-    CooperativeProductStatus, LifecycleAgentCommand, LifecycleAgentConfig,
-    LifecycleAgentInvocation, LifecycleProduct, LifecycleRuntimeError,
-    ProductControlClient, DEFAULT_LIFECYCLE_CLI_CONFIG_PATH,
+    run as run_process_lifecycle_agent, CooperativeAdmission, CooperativeProductStatus,
+    LifecycleAgentCommand, LifecycleAgentConfig, LifecycleAgentInvocation, LifecycleProduct,
+    LifecycleRuntimeError, ProductControlClient, DEFAULT_LIFECYCLE_CLI_CONFIG_PATH,
 };
 pub use receiver::{
     receive_all, receive_one, ReceiverError, ReceiverFrame, ReceiverLimits,
