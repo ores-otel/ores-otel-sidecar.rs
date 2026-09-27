@@ -101,7 +101,7 @@ impl FileLifecycleRecordStore {
         }
         cleanup_temporary(&temporary)?;
         sync_directory(&self.records_root)?;
-        let published = self.read_record(&record.workload_id)?;
+        let published = self.load_record(&record.workload_id)?;
         if published != *record {
             return Err(FileLifecycleRecordStoreError::InvalidRecord);
         }
@@ -150,7 +150,7 @@ impl FileLifecycleRecordStore {
         validate_record_update(expected, next)
             .map_err(|_error| FileLifecycleRecordStoreError::InvalidRecord)?;
 
-        let current = self.read_record(&expected.workload_id)?;
+        let current = self.load_record(&expected.workload_id)?;
         if current != *expected {
             return Err(FileLifecycleRecordStoreError::UnexpectedCurrent);
         }
@@ -164,7 +164,7 @@ impl FileLifecycleRecordStore {
         }
         sync_directory(&self.records_root)?;
 
-        let published = self.read_record(&next.workload_id)?;
+        let published = self.load_record(&next.workload_id)?;
         if published != *next {
             return Err(FileLifecycleRecordStoreError::InvalidRecord);
         }
