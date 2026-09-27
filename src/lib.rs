@@ -54,7 +54,6 @@ pub use file_config::{
 pub use health::Health;
 pub use hooks::{DefaultOverrides, SidecarHooks, SidecarOverrides};
 pub use identity::{SidecarEnv, SidecarIdentity};
-pub use log;
 pub use probe::{NoopProbe, ProductProbe};
 pub use process_lifecycle::{
     decide as decide_process_lifecycle, ActivitySnapshot as ProcessActivitySnapshot,
