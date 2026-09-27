@@ -122,11 +122,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ores-locks-and-leases"
+version = "0.1.1"
+source = "git+https://github.com/ORESoftware/ores-locks-and-leases.git?rev=3ce41cc8f654089c76828ce93e8ce0fc31f773d1#3ce41cc8f654089c76828ce93e8ce0fc31f773d1"
+
+[[package]]
 name = "ores-otel-sidecar"
 version = "0.1.0"
 dependencies = [
  "basic-toml",
  "flags2env",
+ "ores-locks-and-leases",
  "serde",
  "serde_json",
  "sysinfo",

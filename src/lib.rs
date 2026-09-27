@@ -5,7 +5,11 @@
 //! product backend/export policy decisions. Diagnostics go to stderr as JSON.
 
 #![forbid(unsafe_code)]
+// House style intentionally requires explicit `return` in named Rust functions.
+// Keep every other Clippy warning denied by CI; exempt only that conflicting lint.
+#![allow(clippy::needless_return)]
 
+pub mod adapters;
 pub mod apm;
 pub mod bind;
 pub mod cli;
@@ -22,6 +26,9 @@ mod http_impl;
 pub mod identity;
 pub mod log;
 pub mod probe;
+pub mod process_lifecycle;
+pub mod process_lifecycle_agent;
+pub mod process_lifecycle_record;
 pub mod receiver;
 pub mod runtime;
 pub mod runtime_updates;
@@ -44,6 +51,29 @@ pub use health::Health;
 pub use hooks::{DefaultOverrides, SidecarHooks, SidecarOverrides};
 pub use identity::{SidecarEnv, SidecarIdentity};
 pub use probe::{NoopProbe, ProductProbe};
+pub use process_lifecycle::{
+    decide as decide_process_lifecycle, ActivitySnapshot as ProcessActivitySnapshot,
+    InvalidTransition as InvalidProcessLifecycleTransition, LifecycleAction as ProcessLifecycleAction,
+    LifecycleDecision as ProcessLifecycleDecision, LifecycleEvent as ProcessLifecycleEvent,
+    LifecyclePolicy as ProcessLifecyclePolicy, LifecycleState as ProcessLifecycleState,
+    PolicyError as ProcessLifecyclePolicyError, SuspendStrategy as ProcessSuspendStrategy,
+};
+pub use process_lifecycle_agent::{
+    reconcile_once as reconcile_process_lifecycle_once,
+    ControllerScope as ProcessLifecycleControllerScope, LifecycleEffects as ProcessLifecycleEffects,
+    LifecycleRecordStore as ProcessLifecycleRecordStore,
+    ProductLifecycleControl as ProcessLifecycleProductControl,
+    ProductQuiesceOutcome as ProcessLifecycleQuiesceOutcome,
+    ReconcileError as ProcessLifecycleReconcileError,
+    ReconcileOutcome as ProcessLifecycleReconcileOutcome,
+};
+pub use process_lifecycle_record::{
+    validate_record_update as validate_process_lifecycle_record_update,
+    LifecycleCheckpoint as ProcessLifecycleCheckpoint, LifecycleRecord as ProcessLifecycleRecord,
+    LifecycleRecordError as ProcessLifecycleRecordError,
+    PersistedLifecycleState as PersistedProcessLifecycleState,
+    PersistedSuspendStrategy as PersistedProcessSuspendStrategy,
+};
 pub use receiver::{
     receive_all, receive_one, ReceiverError, ReceiverFrame, ReceiverLimits,
     DEFAULT_MAX_DATA_CHUNK_BYTES, DEFAULT_MAX_METADATA_LINE_BYTES,
