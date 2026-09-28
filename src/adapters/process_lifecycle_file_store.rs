@@ -4,20 +4,20 @@
 //! This adapter adds the host-local durability boundary required before any
 //! process effect: records are validated, compared against the caller's expected
 //! revision/fence, written to a synced temporary file, and atomically renamed.
-//! An interrupted write therefore leaves either the previous canonical record or
-//! the complete replacement. Orphaned adapter-owned temporary files are safe to
-//! discard on restart because they were never published as the canonical record.
+//! A stable per-workload lock file serializes the compare+replace critical
+//! section across local controller processes; the lock inode is never replaced
+//! when the canonical JSON record is renamed.
 
 #![forbid(unsafe_code)]
 
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::stream::{read_bounded, write_synced_new};
 use crate::process_lifecycle_agent::LifecycleRecordStore;
 use crate::process_lifecycle_record::{
-    validate_record_update, LifecycleRecord, LifecycleRecordError,
+    LifecycleRecord, LifecycleRecordError, validate_record_update,
 };
 
 const MAX_RECORD_BYTES: u64 = 64 * 1024;
@@ -25,6 +25,7 @@ const MAX_WORKLOAD_ID_BYTES: usize = 96;
 const RECORDS_DIRECTORY: &str = "records";
 const TEMP_PREFIX: &str = ".ores-lifecycle-";
 const TEMP_SUFFIX: &str = ".tmp";
+const LOCK_SUFFIX: &str = ".lock";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileLifecycleRecordStoreError {
@@ -32,6 +33,7 @@ pub enum FileLifecycleRecordStoreError {
     InvalidRecordsDirectory,
     InvalidWorkloadId,
     InvalidRecord,
+    InvalidLockFile,
     RecordTooLarge,
     MissingRecord,
     AlreadyInitialized,
@@ -51,6 +53,7 @@ impl std::fmt::Display for FileLifecycleRecordStoreError {
             }
             Self::InvalidWorkloadId => "lifecycle workload id is not file-store safe",
             Self::InvalidRecord => "lifecycle record violates durable invariants",
+            Self::InvalidLockFile => "lifecycle CAS lock path must be a real regular file",
             Self::RecordTooLarge => "lifecycle record exceeds durable byte limit",
             Self::MissingRecord => "lifecycle record does not exist",
             Self::AlreadyInitialized => "lifecycle record is already initialized",
@@ -85,6 +88,7 @@ impl FileLifecycleRecordStore {
         record: &LifecycleRecord,
     ) -> Result<(), FileLifecycleRecordStoreError> {
         validate_record(record)?;
+        let _lock = self.acquire_workload_lock(&record.workload_id)?;
         let canonical = self.record_path(&record.workload_id)?;
         if path_exists(&canonical)? {
             return Err(FileLifecycleRecordStoreError::AlreadyInitialized);
@@ -118,7 +122,9 @@ impl FileLifecycleRecordStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Err(FileLifecycleRecordStoreError::MissingRecord);
             }
-            Err(error) => return Err(io_error(error)),
+            Err(error) => {
+                return Err(io_error(error));
+            }
         };
         if !metadata.file_type().is_file() {
             return Err(FileLifecycleRecordStoreError::InvalidRecord);
@@ -150,6 +156,9 @@ impl FileLifecycleRecordStore {
         validate_record_update(expected, next)
             .map_err(|_error| FileLifecycleRecordStoreError::InvalidRecord)?;
 
+        // The stable lock file, not the replaceable JSON inode, serializes this
+        // entire local CAS. Re-read current only after the lock is held.
+        let _lock = self.acquire_workload_lock(&expected.workload_id)?;
         let current = self.load_record(&expected.workload_id)?;
         if current != *expected {
             return Err(FileLifecycleRecordStoreError::UnexpectedCurrent);
@@ -174,6 +183,42 @@ impl FileLifecycleRecordStore {
     fn record_path(&self, workload_id: &str) -> Result<PathBuf, FileLifecycleRecordStoreError> {
         let key = workload_file_key(workload_id)?;
         return Ok(self.records_root.join(format!("{key}.json")));
+    }
+
+    fn lock_path(&self, workload_id: &str) -> Result<PathBuf, FileLifecycleRecordStoreError> {
+        let key = workload_file_key(workload_id)?;
+        return Ok(self.records_root.join(format!("{key}{LOCK_SUFFIX}")));
+    }
+
+    fn acquire_workload_lock(
+        &self,
+        workload_id: &str,
+    ) -> Result<File, FileLifecycleRecordStoreError> {
+        let path = self.lock_path(workload_id)?;
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                    return Err(FileLifecycleRecordStoreError::InvalidLockFile);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(io_error(error));
+            }
+        }
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&path)
+            .map_err(io_error)?;
+        let metadata = fs::symlink_metadata(&path).map_err(io_error)?;
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            return Err(FileLifecycleRecordStoreError::InvalidLockFile);
+        }
+        file.lock().map_err(io_error)?;
+        return Ok(file);
     }
 
     fn write_temporary(
@@ -223,10 +268,12 @@ fn validate_record(record: &LifecycleRecord) -> Result<(), FileLifecycleRecordSt
 
 fn workload_file_key(workload_id: &str) -> Result<String, FileLifecycleRecordStoreError> {
     let bytes = workload_id.as_bytes();
-    if bytes.is_empty()
-        || bytes.len() > MAX_WORKLOAD_ID_BYTES
-        || workload_id.chars().any(char::is_control)
-    {
+    let valid = !bytes.is_empty()
+        && bytes.len() <= MAX_WORKLOAD_ID_BYTES
+        && bytes.iter().copied().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+        });
+    if !valid {
         return Err(FileLifecycleRecordStoreError::InvalidWorkloadId);
     }
     return Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect());
@@ -247,13 +294,17 @@ fn ensure_records_directory(path: &Path) -> Result<(), FileLifecycleRecordStoreE
                 .map_err(|_error| FileLifecycleRecordStoreError::InvalidRecordsDirectory);
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(io_error(error)),
+        Err(error) => {
+            return Err(io_error(error));
+        }
     }
 
     match fs::create_dir(path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(io_error(error)),
+        Err(error) => {
+            return Err(io_error(error));
+        }
     }
     return validate_real_directory(path)
         .map_err(|_error| FileLifecycleRecordStoreError::InvalidRecordsDirectory);
@@ -313,6 +364,10 @@ fn io_error(error: std::io::Error) -> FileLifecycleRecordStoreError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
     use super::*;
     use crate::process_lifecycle_record::{
         PersistedLifecycleState, PersistedSuspendStrategy,
@@ -323,6 +378,7 @@ mod tests {
             workload_id: "tenant-42-shard-3".to_owned(),
             assigned_node: "node-a".to_owned(),
             placement_epoch: 7,
+            runtime_epoch: 13,
             fencing_token: fence,
             revision,
             state: PersistedLifecycleState::Running,
@@ -379,6 +435,35 @@ mod tests {
     }
 
     #[test]
+    fn stable_workload_lock_serializes_local_cas_writers(
+    ) -> Result<(), FileLifecycleRecordStoreError> {
+        let root = temporary_root("local-lock")?;
+        let store = FileLifecycleRecordStore::open(&root)?;
+        let initial = record(1, 5);
+        store.initialize(&initial)?;
+
+        let held = store.acquire_workload_lock(&initial.workload_id)?;
+        let writer_store = store.clone();
+        let expected = initial.clone();
+        let next = record(2, 6);
+        let (started_tx, started_rx) = mpsc::channel();
+        let writer = thread::spawn(move || {
+            started_tx.send(()).expect("signal writer start");
+            return writer_store.replace_record(&expected, &next);
+        });
+
+        started_rx.recv().expect("observe writer start");
+        thread::sleep(Duration::from_millis(25));
+        assert!(!writer.is_finished());
+        drop(held);
+
+        assert_eq!(writer.join().expect("join writer"), Ok(()));
+        assert_eq!(store.load_record(&initial.workload_id)?, record(2, 6));
+        fs::remove_dir_all(root).map_err(io_error)?;
+        return Ok(());
+    }
+
+    #[test]
     fn restart_discards_unpublished_adapter_temporary_file(
     ) -> Result<(), FileLifecycleRecordStoreError> {
         let root = temporary_root("recovery")?;
@@ -404,13 +489,33 @@ mod tests {
             workload_id: "../escape".to_owned(),
             ..record(1, 5)
         };
-        store.initialize(&invalid)?;
 
-        let records_root = root.join(RECORDS_DIRECTORY);
-        let escaped = root.join("escape.json");
-        assert!(!escaped.exists());
-        assert_eq!(store.load_record("../escape")?, invalid);
-        assert!(records_root.is_dir());
+        assert_eq!(
+            store.initialize(&invalid),
+            Err(FileLifecycleRecordStoreError::InvalidWorkloadId)
+        );
+        assert!(!root.join("escape.json").exists());
+        fs::remove_dir_all(root).map_err(io_error)?;
+        return Ok(());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_lock_file_fails_closed() -> Result<(), FileLifecycleRecordStoreError> {
+        use std::os::unix::fs::symlink;
+
+        let root = temporary_root("lock-symlink")?;
+        let outside = root.join("outside");
+        fs::write(&outside, b"outside").map_err(io_error)?;
+        let store = FileLifecycleRecordStore::open(&root)?;
+        let lock_path = store.lock_path("tenant-42-shard-3")?;
+        symlink(&outside, &lock_path).map_err(io_error)?;
+
+        assert_eq!(
+            store.initialize(&record(1, 5)),
+            Err(FileLifecycleRecordStoreError::InvalidLockFile)
+        );
+        fs::remove_file(lock_path).map_err(io_error)?;
         fs::remove_dir_all(root).map_err(io_error)?;
         return Ok(());
     }
