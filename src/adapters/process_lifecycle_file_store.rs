@@ -448,16 +448,24 @@ mod tests {
         let next = record(2, 6);
         let (started_tx, started_rx) = mpsc::channel();
         let writer = thread::spawn(move || {
-            started_tx.send(()).expect("signal writer start");
+            let _send_result = started_tx.send(());
             return writer_store.replace_record(&expected, &next);
         });
 
-        started_rx.recv().expect("observe writer start");
+        assert!(started_rx.recv_timeout(Duration::from_secs(1)).is_ok());
         thread::sleep(Duration::from_millis(25));
         assert!(!writer.is_finished());
         drop(held);
 
-        assert_eq!(writer.join().expect("join writer"), Ok(()));
+        let writer_result = match writer.join() {
+            Ok(result) => result,
+            Err(_panic_payload) => {
+                return Err(FileLifecycleRecordStoreError::Io(
+                    std::io::ErrorKind::Other,
+                ));
+            }
+        };
+        assert_eq!(writer_result, Ok(()));
         assert_eq!(store.load_record(&initial.workload_id)?, record(2, 6));
         fs::remove_dir_all(root).map_err(io_error)?;
         return Ok(());
