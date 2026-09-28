@@ -1,13 +1,15 @@
 //! Concrete runtime boundary for `ores-process-lifecycle-agent`.
 //!
-//! The first executable increment is intentionally observe-only. It validates
-//! host authority configuration and the cooperative product protocol, but it
-//! cannot execute lifecycle mutations until durable CAS storage, trusted demand
-//! observation, managed-lease transport, and post-wake admission are composed.
+//! The executable remains mutation-disabled. It now validates both independent
+//! control seams required before effects can be composed: the cooperative
+//! product runtime and the trusted host/control-plane authority. Durable CAS,
+//! distributed lease transport, process attestation, and effect reconciliation
+//! are still mandatory before `effects_enabled=true` may be honored.
 
 #![forbid(unsafe_code)]
 
 mod config;
+mod host_control;
 mod product_control;
 
 use std::collections::BTreeMap;
@@ -16,6 +18,9 @@ use std::time::Duration;
 use flags2env::BundledFlags2Env;
 
 pub use config::{LifecycleAgentConfig, LifecycleProduct};
+pub use host_control::{
+    TrustedHostControlClient, TrustedHostSnapshot, TrustedWorkloadSnapshot,
+};
 pub use product_control::{
     CooperativeAdmission, CooperativeProductStatus, ProductControlClient,
 };
@@ -27,6 +32,7 @@ pub enum LifecycleAgentCommand {
     Serve,
     Preflight,
     ProbeProduct,
+    ProbeHost,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,6 +49,7 @@ pub enum LifecycleRuntimeError {
     InvalidIdentity,
     InvalidPath,
     InvalidProductSocket,
+    InvalidHostControlSocket,
     InvalidReconcileSeconds,
     InvalidBoolean,
     UnsupportedLeaseBackend,
@@ -57,6 +64,12 @@ pub enum LifecycleRuntimeError {
     ProductDrainTimeout,
     ProductDemandReturned,
     ProductLifecycleBusy,
+    HostControlUnavailable,
+    HostControlResponseTooLarge,
+    InvalidHostControlResponse,
+    InvalidHostControlRequest,
+    HostIdentityMismatch,
+    HostDemandChanged,
     MutationRuntimeNotEnabled,
 }
 
@@ -76,6 +89,9 @@ impl LifecycleRuntimeError {
             Self::InvalidIdentity => "invalid lifecycle cluster/node identity",
             Self::InvalidPath => "invalid lifecycle authority path",
             Self::InvalidProductSocket => "product socket does not match the product contract",
+            Self::InvalidHostControlSocket => {
+                "host-control socket does not match the product contract"
+            }
             Self::InvalidReconcileSeconds => "invalid lifecycle reconciliation cadence",
             Self::InvalidBoolean => "invalid lifecycle boolean value",
             Self::UnsupportedLeaseBackend => "unsupported lifecycle lease backend",
@@ -90,8 +106,16 @@ impl LifecycleRuntimeError {
             Self::ProductDrainTimeout => "product runtime drain timed out",
             Self::ProductDemandReturned => "product runtime observed returned demand",
             Self::ProductLifecycleBusy => "product lifecycle control is busy",
+            Self::HostControlUnavailable => "trusted host lifecycle control is unavailable",
+            Self::HostControlResponseTooLarge => {
+                "trusted host lifecycle response exceeded its bound"
+            }
+            Self::InvalidHostControlResponse => "trusted host lifecycle response is invalid",
+            Self::InvalidHostControlRequest => "trusted host lifecycle request is invalid",
+            Self::HostIdentityMismatch => "trusted host lifecycle identity is stale or mismatched",
+            Self::HostDemandChanged => "trusted host lifecycle demand changed during transition",
             Self::MutationRuntimeNotEnabled => {
-                "lifecycle effects require durable store and lease transport wiring"
+                "lifecycle effects require durable store, lease transport, attestation, and recovery wiring"
             }
         };
     }
@@ -152,6 +176,9 @@ fn parse_command(value: &str) -> Result<LifecycleAgentCommand, LifecycleRuntimeE
     if value == "probe-product" {
         return Ok(LifecycleAgentCommand::ProbeProduct);
     }
+    if value == "probe-host" {
+        return Ok(LifecycleAgentCommand::ProbeHost);
+    }
     return Err(LifecycleRuntimeError::InvalidArguments);
 }
 
@@ -164,6 +191,11 @@ pub fn run(invocation: LifecycleAgentInvocation) -> Result<(), LifecycleRuntimeE
         let _status = ProductControlClient::new(&invocation.config).status()?;
         return Ok(());
     }
+    if invocation.command == LifecycleAgentCommand::ProbeHost {
+        invocation.config.preflight_host()?;
+        let _snapshot = TrustedHostControlClient::new(&invocation.config).snapshot()?;
+        return Ok(());
+    }
 
     invocation.config.preflight_host()?;
     if invocation.config.effects_enabled {
@@ -173,13 +205,16 @@ pub fn run(invocation: LifecycleAgentInvocation) -> Result<(), LifecycleRuntimeE
 }
 
 fn serve_observe_only(config: LifecycleAgentConfig) -> Result<(), LifecycleRuntimeError> {
-    let client = ProductControlClient::new(&config);
+    let product = ProductControlClient::new(&config);
+    let host = TrustedHostControlClient::new(&config);
     let cadence = Duration::from_secs(config.reconcile_seconds);
     loop {
-        // Cooperative status is intentionally discarded. Until trusted demand,
-        // durable state and fenced authority are wired, this loop proves only
-        // that the product-control seam remains reachable and bounded.
-        let _observation = client.status();
+        // These observations remain deliberately non-mutating. The product seam
+        // proves cooperative reachability while the host seam proves that a
+        // distinct trusted authority can enumerate validated workload identity,
+        // placement, demand, and isolation-policy evidence.
+        let _product_observation = product.status();
+        let _host_observation = host.snapshot();
         std::thread::sleep(cadence);
     }
 }

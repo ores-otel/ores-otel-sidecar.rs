@@ -58,7 +58,14 @@ env = "ORES_PROCESS_LIFECYCLE_PRODUCT_SOCKET"
 aliases = ["product-socket"]
 type = "string"
 default = ""
-help = "Fixed product-owned Unix control socket. Must match the product adapter contract."
+help = "Fixed product-owned cooperative Unix control socket. Must match the product adapter contract."
+
+[flags.host-control-socket]
+env = "ORES_PROCESS_LIFECYCLE_HOST_CONTROL_SOCKET"
+aliases = ["host-control-socket"]
+type = "string"
+default = ""
+help = "Fixed trusted host/control-plane Unix socket for placement, demand, process identity, isolation evidence, and post-wake admission."
 
 [flags.reconcile-seconds]
 env = "ORES_PROCESS_LIFECYCLE_RECONCILE_SECONDS"
@@ -90,12 +97,16 @@ type = "bool"
 default = false
 true_aliases = ["t", "1", "yes"]
 false_aliases = ["f", "0", "no"]
-help = "Enable lifecycle mutations. Initial agent PR fails closed when true until durable store/transport wiring lands."
+help = "Enable lifecycle mutations. The agent still fails closed when true until record/lease/attestation/recovery composition lands."
 
 [commands.preflight]
 env = "ORES_PROCESS_LIFECYCLE_COMMAND_PREFLIGHT"
-help = "Validate flags, authority paths, product/socket contract, and local host prerequisites without connecting or mutating."
+help = "Validate flags, authority paths, both socket contracts, and local host prerequisites without connecting or mutating."
 
 [commands.probe-product]
 env = "ORES_PROCESS_LIFECYCLE_COMMAND_PROBE_PRODUCT"
 help = "Perform one bounded read-only v1 status handshake with the cooperative product runtime."
+
+[commands.probe-host]
+env = "ORES_PROCESS_LIFECYCLE_COMMAND_PROBE_HOST"
+help = "Perform one bounded read-only v1 snapshot handshake with the trusted host/control-plane lifecycle authority."
