@@ -121,24 +121,23 @@ fn read_response(
     if bytes.len() > MAX_CONTROL_RESPONSE_BYTES {
         return Err(LifecycleRuntimeError::ControlResponseTooLarge);
     }
-    if bytes.contains(&b'\n') {
-        return finish_response(bytes);
-    }
     return read_response(stream, [0_u8; 256], bytes);
 }
 
 fn finish_response(bytes: Vec<u8>) -> Result<String, LifecycleRuntimeError> {
-    let newline = match bytes.iter().position(|byte| *byte == b'\n') {
-        Some(index) => index,
-        None => bytes.len(),
-    };
-    let line = std::str::from_utf8(&bytes[..newline])
-        .map_err(|_error| LifecycleRuntimeError::InvalidControlResponse)?;
-    let trimmed = line.trim_matches(['\r', ' ', '\t']);
-    if trimmed.is_empty() {
+    if bytes.is_empty() || bytes.last() != Some(&b'\n') {
         return Err(LifecycleRuntimeError::InvalidControlResponse);
     }
-    return Ok(trimmed.to_owned());
+    let line = &bytes[..bytes.len() - 1];
+    if line.is_empty() || line.contains(&b'\n') || line.contains(&b'\r') {
+        return Err(LifecycleRuntimeError::InvalidControlResponse);
+    }
+    let text = std::str::from_utf8(line)
+        .map_err(|_error| LifecycleRuntimeError::InvalidControlResponse)?;
+    if text.trim() != text {
+        return Err(LifecycleRuntimeError::InvalidControlResponse);
+    }
+    return Ok(text.to_owned());
 }
 
 fn parse_status_response(response: &str) -> Result<CooperativeProductStatus, LifecycleRuntimeError> {
@@ -210,13 +209,21 @@ mod tests {
     }
 
     #[test]
-    fn control_responses_are_bounded_and_canonical() {
+    fn control_responses_require_one_exact_newline_terminated_frame() {
         assert_eq!(
-            finish_response(b"ok running\nignored".to_vec()),
+            finish_response(b"ok running\n".to_vec()),
             Ok("ok running".to_owned())
         );
         assert_eq!(
-            finish_response(Vec::new()),
+            finish_response(b"ok running".to_vec()),
+            Err(LifecycleRuntimeError::InvalidControlResponse)
+        );
+        assert_eq!(
+            finish_response(b"ok running\nignored\n".to_vec()),
+            Err(LifecycleRuntimeError::InvalidControlResponse)
+        );
+        assert_eq!(
+            finish_response(b" ok running\n".to_vec()),
             Err(LifecycleRuntimeError::InvalidControlResponse)
         );
     }

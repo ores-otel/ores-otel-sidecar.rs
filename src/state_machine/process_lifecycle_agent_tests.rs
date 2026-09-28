@@ -113,6 +113,7 @@ fn record(
         workload_id: "workload-7".to_owned(),
         assigned_node: "node-a".to_owned(),
         placement_epoch: 4,
+        runtime_epoch: 21,
         fencing_token: 9,
         revision: 12,
         state,
@@ -126,6 +127,7 @@ fn scope() -> ControllerScope {
         workload_id: "workload-7".to_owned(),
         node: "node-a".to_owned(),
         placement_epoch: 4,
+        runtime_epoch: 21,
     };
 }
 
@@ -235,7 +237,38 @@ fn idle_freeze_persists_intents_before_effect_completion() {
     assert_eq!(outcome, Ok(ReconcileOutcome::Suspended));
     assert_eq!(store.record.state, PersistedLifecycleState::Frozen);
     assert_eq!(store.record.fencing_token, 10);
+    assert_eq!(store.record.runtime_epoch, 21);
     assert!(effects.frozen);
+}
+
+#[test]
+fn stale_runtime_incarnation_cannot_reconcile_replacement_process() {
+    let mut store = MemoryStore {
+        record: record(
+            PersistedSuspendStrategy::Freeze,
+            PersistedLifecycleState::Running,
+            None,
+        ),
+    };
+    let mut stale_scope = scope();
+    stale_scope.runtime_epoch = 20;
+    let mut host = idle_host();
+    let mut product = product(ProductQuiesceOutcome::Drained);
+    let mut effects = unfrozen_effects();
+
+    let outcome = reconcile_once(
+        &stale_scope,
+        10,
+        freeze_policy(),
+        &mut store,
+        &mut host,
+        &mut product,
+        &mut effects,
+    );
+
+    assert_eq!(outcome, Err(ReconcileError::StaleRuntime));
+    assert_eq!(store.record.state, PersistedLifecycleState::Running);
+    assert!(!effects.frozen);
 }
 
 #[test]

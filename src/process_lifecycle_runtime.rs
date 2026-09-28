@@ -1,6 +1,6 @@
 //! Concrete runtime boundary for `ores-process-lifecycle-agent`.
 //!
-//! The executable remains mutation-disabled. It now validates both independent
+//! The executable remains mutation-disabled. It validates both independent
 //! control seams required before effects can be composed: the cooperative
 //! product runtime and the trusted host/control-plane authority. Durable CAS,
 //! distributed lease transport, process attestation, and effect reconciliation
@@ -19,7 +19,7 @@ use flags2env::BundledFlags2Env;
 
 pub use config::{LifecycleAgentConfig, LifecycleProduct};
 pub use host_control::{
-    TrustedHostControlClient, TrustedHostSnapshot, TrustedWorkloadSnapshot,
+    TrustedHostAdmission, TrustedHostControlClient, TrustedHostSnapshot, TrustedWorkloadSnapshot,
 };
 pub use product_control::{
     CooperativeAdmission, CooperativeProductStatus, ProductControlClient,
@@ -212,7 +212,7 @@ fn serve_observe_only(config: LifecycleAgentConfig) -> Result<(), LifecycleRunti
         // These observations remain deliberately non-mutating. The product seam
         // proves cooperative reachability while the host seam proves that a
         // distinct trusted authority can enumerate validated workload identity,
-        // placement, demand, and isolation-policy evidence.
+        // placement, runtime incarnation, demand, and isolation-policy evidence.
         let _product_observation = product.status();
         let _host_observation = host.snapshot();
         std::thread::sleep(cadence);
