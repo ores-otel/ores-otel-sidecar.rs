@@ -211,6 +211,7 @@ impl FileLifecycleRecordStore {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&path)
             .map_err(io_error)?;
         let metadata = fs::symlink_metadata(&path).map_err(io_error)?;
