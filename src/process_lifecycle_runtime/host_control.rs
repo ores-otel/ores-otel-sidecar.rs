@@ -4,7 +4,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::{LifecycleAgentConfig, LifecycleRuntimeError};
 
@@ -14,7 +14,7 @@ const HOST_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_IDENTITY_BYTES: usize = 96;
 const MAX_POLICY_DIGEST_BYTES: usize = 80;
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct TrustedWorkloadSnapshot {
     pub workload_id: String,
     pub runtime_epoch: u64,
@@ -29,7 +29,7 @@ pub struct TrustedWorkloadSnapshot {
     pub routable: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct TrustedHostSnapshot {
     pub version: u32,
     pub workloads: Vec<TrustedWorkloadSnapshot>,
