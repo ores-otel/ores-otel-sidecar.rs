@@ -2,7 +2,7 @@
 //!
 //! The distributed lease serializes controllers. The persisted record makes the
 //! lease's fencing token durable so a controller that wakes up after lease loss
-//! cannot publish stale lifecycle or placement state.
+//! cannot publish stale lifecycle, placement, or runtime-incarnation state.
 
 #![forbid(unsafe_code)]
 
@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 const MAX_CHECKPOINT_ARTIFACT_REF_BYTES: usize = 2_048;
 const MAX_CHECKPOINT_FORMAT_BYTES: usize = 128;
+const MAX_IDENTITY_BYTES: usize = 96;
 
 /// Persisted lifecycle states use explicit stable wire names rather than Rust
 /// enum layout or debug formatting.
@@ -50,6 +51,10 @@ pub struct LifecycleRecord {
     pub assigned_node: String,
     /// Monotonic scheduler placement generation. Increment on reassignment.
     pub placement_epoch: u64,
+    /// Monotonic runtime incarnation. Increment whenever the managed process is
+    /// replaced even when it remains on the same node and placement.
+    #[serde(default)]
+    pub runtime_epoch: u64,
     /// Monotonic token minted by the distributed lifecycle lease authority.
     pub fencing_token: u64,
     /// Monotonic record revision inside one logical workload history.
@@ -63,10 +68,13 @@ pub struct LifecycleRecord {
 pub enum LifecycleRecordError {
     EmptyWorkloadId,
     EmptyAssignedNode,
+    InvalidWorkloadId,
+    InvalidAssignedNode,
     InvalidCheckpoint,
     InvalidCheckpointDigest,
     StateStrategyMismatch,
     ZeroPlacementEpoch,
+    ZeroRuntimeEpoch,
     ZeroFencingToken,
     ZeroRevision,
     WorkloadChanged,
@@ -74,6 +82,9 @@ pub enum LifecycleRecordError {
     RevisionDidNotAdvance,
     PlacementEpochRegressed,
     PlacementChangedWithoutEpochAdvance,
+    RuntimeEpochRegressed,
+    RuntimeChangedWithoutFenceAdvance,
+    RuntimeChangedOutsideRunning,
     CheckpointRequired,
     CheckpointNotAllowed,
 }
@@ -83,13 +94,23 @@ impl LifecycleRecord {
         if self.workload_id.is_empty() {
             return Err(LifecycleRecordError::EmptyWorkloadId);
         }
+        if !valid_identity_segment(&self.workload_id) {
+            return Err(LifecycleRecordError::InvalidWorkloadId);
+        }
 
         if self.assigned_node.is_empty() {
             return Err(LifecycleRecordError::EmptyAssignedNode);
         }
+        if !valid_identity_segment(&self.assigned_node) {
+            return Err(LifecycleRecordError::InvalidAssignedNode);
+        }
 
         if self.placement_epoch == 0 {
             return Err(LifecycleRecordError::ZeroPlacementEpoch);
+        }
+
+        if self.runtime_epoch == 0 {
+            return Err(LifecycleRecordError::ZeroRuntimeEpoch);
         }
 
         if self.fencing_token == 0 {
@@ -157,18 +178,29 @@ impl LifecycleRecord {
     }
 
     /// A host may perform a local process effect only while it still owns the
-    /// record's placement and the record was written under its current fence.
+    /// record's placement/runtime incarnation and the record was written under
+    /// its current fence.
     #[must_use]
     pub fn authorizes_controller(
         &self,
         node: &str,
         placement_epoch: u64,
+        runtime_epoch: u64,
         fencing_token: u64,
     ) -> bool {
         return self.assigned_node == node
             && self.placement_epoch == placement_epoch
+            && self.runtime_epoch == runtime_epoch
             && self.fencing_token == fencing_token;
     }
+}
+
+fn valid_identity_segment(value: &str) -> bool {
+    return !value.is_empty()
+        && value.len() <= MAX_IDENTITY_BYTES
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+        });
 }
 
 fn valid_checkpoint_digest(value: &str) -> bool {
@@ -186,8 +218,11 @@ fn valid_checkpoint_digest(value: &str) -> bool {
 ///
 /// A strictly newer fence may continue from any prior revision. Reusing the same
 /// fence is allowed for a multi-step transition, but the durable revision must
-/// advance. Placement can only move forward, and moving nodes requires an epoch
-/// increment so the prior host is unambiguously stale.
+/// advance. Placement and runtime epochs can only move forward. Moving nodes
+/// requires a placement epoch increment. Replacing a runtime incarnation,
+/// including on the same node, requires a strictly newer distributed fence and
+/// resets the durable lifecycle to `running`; a stale frozen/checkpointed record
+/// must never be silently inherited by a new process.
 pub fn validate_record_update(
     current: &LifecycleRecord,
     next: &LifecycleRecord,
@@ -217,6 +252,19 @@ pub fn validate_record_update(
         return Err(LifecycleRecordError::PlacementChangedWithoutEpochAdvance);
     }
 
+    if next.runtime_epoch < current.runtime_epoch {
+        return Err(LifecycleRecordError::RuntimeEpochRegressed);
+    }
+
+    if next.runtime_epoch > current.runtime_epoch {
+        if next.fencing_token <= current.fencing_token {
+            return Err(LifecycleRecordError::RuntimeChangedWithoutFenceAdvance);
+        }
+        if next.state != PersistedLifecycleState::Running || next.checkpoint.is_some() {
+            return Err(LifecycleRecordError::RuntimeChangedOutsideRunning);
+        }
+    }
+
     return Ok(());
 }
 
@@ -229,6 +277,7 @@ mod tests {
             workload_id: "tenant-42-shard-3".to_owned(),
             assigned_node: "node-a".to_owned(),
             placement_epoch: 7,
+            runtime_epoch: 13,
             fencing_token: 19,
             revision: 11,
             state: PersistedLifecycleState::Frozen,
@@ -273,6 +322,17 @@ mod tests {
     }
 
     #[test]
+    fn identity_segments_are_bounded_and_path_safe() {
+        let mut value = record();
+        value.workload_id = "../tenant".to_owned();
+        assert_eq!(value.validate(), Err(LifecycleRecordError::InvalidWorkloadId));
+
+        let mut value = record();
+        value.assigned_node = "node/escape".to_owned();
+        assert_eq!(value.validate(), Err(LifecycleRecordError::InvalidAssignedNode));
+    }
+
+    #[test]
     fn reassignment_requires_new_placement_epoch() {
         let current = record();
         let mut next = current.clone();
@@ -296,8 +356,75 @@ mod tests {
         next.revision = 12;
 
         assert_eq!(validate_record_update(&current, &next), Ok(()));
-        assert!(!next.authorizes_controller("node-a", 7, 19));
-        assert!(next.authorizes_controller("node-b", 8, 20));
+        assert!(!next.authorizes_controller("node-a", 7, 13, 19));
+        assert!(next.authorizes_controller("node-b", 8, 13, 20));
+    }
+
+    #[test]
+    fn replacement_runtime_requires_new_fence_and_running_reset() {
+        let current = record();
+        let mut same_fence = current.clone();
+        same_fence.runtime_epoch = 14;
+        same_fence.revision = 12;
+        same_fence.state = PersistedLifecycleState::Running;
+        assert_eq!(
+            validate_record_update(&current, &same_fence),
+            Err(LifecycleRecordError::RuntimeChangedWithoutFenceAdvance)
+        );
+
+        let mut still_frozen = same_fence.clone();
+        still_frozen.fencing_token = 20;
+        still_frozen.state = PersistedLifecycleState::Frozen;
+        assert_eq!(
+            validate_record_update(&current, &still_frozen),
+            Err(LifecycleRecordError::RuntimeChangedOutsideRunning)
+        );
+
+        let mut replacement = same_fence;
+        replacement.fencing_token = 20;
+        assert_eq!(validate_record_update(&current, &replacement), Ok(()));
+        assert!(!replacement.authorizes_controller("node-a", 7, 13, 20));
+        assert!(replacement.authorizes_controller("node-a", 7, 14, 20));
+    }
+
+    #[test]
+    fn runtime_epoch_cannot_regress() {
+        let current = record();
+        let mut next = current.clone();
+        next.runtime_epoch = 12;
+        next.fencing_token = 20;
+        next.revision = 12;
+
+        assert_eq!(
+            validate_record_update(&current, &next),
+            Err(LifecycleRecordError::RuntimeEpochRegressed)
+        );
+    }
+
+    #[test]
+    fn legacy_record_without_runtime_epoch_fails_closed() {
+        let encoded = serde_json::json!({
+            "workload_id": "tenant-42-shard-3",
+            "assigned_node": "node-a",
+            "placement_epoch": 7,
+            "fencing_token": 19,
+            "revision": 11,
+            "state": "frozen",
+            "strategy": "freeze",
+            "checkpoint": null
+        });
+        let decoded = serde_json::from_value::<LifecycleRecord>(encoded);
+        assert!(matches!(
+            decoded,
+            Ok(LifecycleRecord {
+                runtime_epoch: 0,
+                ..
+            })
+        ));
+        assert_eq!(
+            decoded.and_then(|value| value.validate().map(|_| value)),
+            Err(LifecycleRecordError::ZeroRuntimeEpoch)
+        );
     }
 
     #[test]
