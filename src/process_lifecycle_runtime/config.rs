@@ -29,6 +29,14 @@ impl LifecycleProduct {
         }
         return "/run/scintilla-lifecycle/control.sock";
     }
+
+    #[must_use]
+    pub const fn required_host_control_socket(self) -> &'static str {
+        if matches!(self, Self::BeamScale) {
+            return "/run/beamscale-lifecycle/host-control.sock";
+        }
+        return "/run/scintilla-lifecycle/host-control.sock";
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +48,7 @@ pub struct LifecycleAgentConfig {
     pub checkpoint_root: PathBuf,
     pub cgroup_root: PathBuf,
     pub product_socket: PathBuf,
+    pub host_control_socket: PathBuf,
     pub reconcile_seconds: u64,
     pub hibernate_enabled: bool,
     pub effects_enabled: bool,
@@ -74,7 +83,11 @@ impl LifecycleAgentConfig {
             product,
             required_value(values, "ORES_PROCESS_LIFECYCLE_PRODUCT_SOCKET")?,
         )?;
-        if state_root == checkpoint_root {
+        let host_control_socket = parse_host_control_socket(
+            product,
+            required_value(values, "ORES_PROCESS_LIFECYCLE_HOST_CONTROL_SOCKET")?,
+        )?;
+        if state_root == checkpoint_root || product_socket == host_control_socket {
             return Err(LifecycleRuntimeError::InvalidPath);
         }
 
@@ -110,6 +123,7 @@ impl LifecycleAgentConfig {
             checkpoint_root,
             cgroup_root,
             product_socket,
+            host_control_socket,
             reconcile_seconds,
             hibernate_enabled,
             effects_enabled,
@@ -126,11 +140,12 @@ impl LifecycleAgentConfig {
         for path in [&self.state_root, &self.checkpoint_root, &self.cgroup_root] {
             validate_existing_directory(path)?;
         }
-        let parent = self
-            .product_socket
-            .parent()
-            .ok_or(LifecycleRuntimeError::InvalidProductSocket)?;
-        validate_existing_directory(parent)?;
+        for socket in [&self.product_socket, &self.host_control_socket] {
+            let parent = socket
+                .parent()
+                .ok_or(LifecycleRuntimeError::InvalidProductSocket)?;
+            validate_existing_directory(parent)?;
+        }
         return Ok(());
     }
 }
@@ -200,6 +215,18 @@ fn parse_product_socket(
     return Ok(path);
 }
 
+fn parse_host_control_socket(
+    product: LifecycleProduct,
+    value: String,
+) -> Result<PathBuf, LifecycleRuntimeError> {
+    if value != product.required_host_control_socket() {
+        return Err(LifecycleRuntimeError::InvalidHostControlSocket);
+    }
+    let path = PathBuf::from(value);
+    validate_absolute_no_traversal(&path)?;
+    return Ok(path);
+}
+
 fn validate_absolute_no_traversal(path: &Path) -> Result<(), LifecycleRuntimeError> {
     if !path.is_absolute() {
         return Err(LifecycleRuntimeError::InvalidPath);
@@ -240,10 +267,16 @@ mod tests {
     use super::*;
 
     fn values(product: &str) -> BTreeMap<String, String> {
-        let socket = if product == "beamscale" {
-            "/run/beamscale-lifecycle/control.sock"
+        let (product_socket, host_control_socket) = if product == "beamscale" {
+            (
+                "/run/beamscale-lifecycle/control.sock",
+                "/run/beamscale-lifecycle/host-control.sock",
+            )
         } else {
-            "/run/scintilla-lifecycle/control.sock"
+            (
+                "/run/scintilla-lifecycle/control.sock",
+                "/run/scintilla-lifecycle/host-control.sock",
+            )
         };
         return BTreeMap::from([
             ("ORES_PROCESS_LIFECYCLE_PRODUCT".to_owned(), product.to_owned()),
@@ -261,7 +294,14 @@ mod tests {
                 "ORES_PROCESS_LIFECYCLE_CGROUP_ROOT".to_owned(),
                 "/sys/fs/cgroup/ores-workloads.slice".to_owned(),
             ),
-            ("ORES_PROCESS_LIFECYCLE_PRODUCT_SOCKET".to_owned(), socket.to_owned()),
+            (
+                "ORES_PROCESS_LIFECYCLE_PRODUCT_SOCKET".to_owned(),
+                product_socket.to_owned(),
+            ),
+            (
+                "ORES_PROCESS_LIFECYCLE_HOST_CONTROL_SOCKET".to_owned(),
+                host_control_socket.to_owned(),
+            ),
             (
                 "ORES_PROCESS_LIFECYCLE_RECONCILE_SECONDS".to_owned(),
                 "15".to_owned(),
@@ -282,9 +322,9 @@ mod tests {
     }
 
     #[test]
-    fn product_socket_is_exact_and_product_specific() {
+    fn product_and_host_sockets_are_exact_and_product_specific() {
         assert!(LifecycleAgentConfig::from_values(&values("beamscale")).is_ok());
-        let invalid = values("beamscale")
+        let invalid_product = values("beamscale")
             .into_iter()
             .map(|(key, value)| {
                 if key == "ORES_PROCESS_LIFECYCLE_PRODUCT_SOCKET" {
@@ -294,8 +334,22 @@ mod tests {
             })
             .collect::<BTreeMap<_, _>>();
         assert_eq!(
-            LifecycleAgentConfig::from_values(&invalid),
+            LifecycleAgentConfig::from_values(&invalid_product),
             Err(LifecycleRuntimeError::InvalidProductSocket)
+        );
+
+        let invalid_host = values("beamscale")
+            .into_iter()
+            .map(|(key, value)| {
+                if key == "ORES_PROCESS_LIFECYCLE_HOST_CONTROL_SOCKET" {
+                    return (key, "/run/scintilla-lifecycle/host-control.sock".to_owned());
+                }
+                return (key, value);
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            LifecycleAgentConfig::from_values(&invalid_host),
+            Err(LifecycleRuntimeError::InvalidHostControlSocket)
         );
     }
 
