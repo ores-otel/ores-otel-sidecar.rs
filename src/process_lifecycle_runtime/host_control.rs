@@ -12,7 +12,7 @@ const MAX_HOST_RESPONSE_BYTES: usize = 256 * 1024;
 const MAX_WORKLOADS: usize = 1024;
 const HOST_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_IDENTITY_BYTES: usize = 96;
-const MAX_POLICY_DIGEST_BYTES: usize = 80;
+const POLICY_DIGEST_BYTES: usize = 71;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct TrustedWorkloadSnapshot {
@@ -199,7 +199,7 @@ fn validate_identity(value: &str) -> Result<(), LifecycleRuntimeError> {
 }
 
 fn validate_policy_digest(value: &str) -> Result<(), LifecycleRuntimeError> {
-    if value.len() != MAX_POLICY_DIGEST_BYTES || !value.starts_with("sha256:") {
+    if value.len() != POLICY_DIGEST_BYTES || !value.starts_with("sha256:") {
         return Err(LifecycleRuntimeError::InvalidHostControlResponse);
     }
     let digest = &value[7..];
