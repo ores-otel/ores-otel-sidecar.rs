@@ -81,20 +81,25 @@ impl LifecycleEffects for FreezeOnlyCgroupEffects {
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error;
     use std::fs;
     use std::io;
     use std::path::{Path, PathBuf};
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::Duration;
 
     use super::*;
 
-    fn fixture_dir(name: &str) -> Result<PathBuf, Box<dyn Error>> {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    fn fixture_dir(name: &str) -> io::Result<PathBuf> {
         let root = std::env::temp_dir().join(format!(
-            "ores-lifecycle-freeze-{name}-{}-{nonce}",
+            "ores-lifecycle-freeze-{name}-{}",
             std::process::id()
         ));
+        match fs::remove_dir_all(&root) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error);
+            }
+        }
         fs::create_dir_all(&root)?;
         return Ok(root);
     }
@@ -126,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn freeze_waits_for_kernel_confirmed_frozen_state() -> Result<(), Box<dyn Error>> {
+    fn freeze_waits_for_kernel_confirmed_frozen_state() -> io::Result<()> {
         let root = fixture_dir("freeze")?;
         write_events(&root, true)?;
         let controller = CgroupV2Controller::new(&root);
@@ -143,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn thaw_waits_for_kernel_confirmed_thawed_state() -> Result<(), Box<dyn Error>> {
+    fn thaw_waits_for_kernel_confirmed_thawed_state() -> io::Result<()> {
         let root = fixture_dir("thaw")?;
         write_events(&root, false)?;
         let controller = CgroupV2Controller::new(&root);
@@ -160,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn hibernate_operations_are_unconditionally_rejected() -> Result<(), Box<dyn Error>> {
+    fn hibernate_operations_are_unconditionally_rejected() -> io::Result<()> {
         let root = fixture_dir("hibernate-disabled")?;
         write_events(&root, false)?;
         let controller = CgroupV2Controller::new(&root);
