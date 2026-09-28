@@ -81,88 +81,100 @@ impl LifecycleEffects for FreezeOnlyCgroupEffects {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
     use std::fs;
+    use std::io;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::*;
 
-    fn fixture_dir(name: &str) -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
+    fn fixture_dir(name: &str) -> Result<PathBuf, Box<dyn Error>> {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let root = std::env::temp_dir().join(format!(
             "ores-lifecycle-freeze-{name}-{}-{nonce}",
             std::process::id()
         ));
-        fs::create_dir_all(&root).expect("create fixture cgroup");
-        return root;
+        fs::create_dir_all(&root)?;
+        return Ok(root);
     }
 
-    fn write_events(root: &Path, frozen: bool) {
+    fn write_events(root: &Path, frozen: bool) -> io::Result<()> {
         let frozen_flag = if frozen { 1 } else { 0 };
         fs::write(
             root.join("cgroup.events"),
             format!("populated 1\nfrozen {frozen_flag}\n"),
-        )
-        .expect("write cgroup.events");
-        fs::write(root.join("cgroup.freeze"), b"0\n").expect("write cgroup.freeze");
+        )?;
+        return fs::write(root.join("cgroup.freeze"), b"0\n");
+    }
+
+    fn run_freeze(mut effects: FreezeOnlyCgroupEffects) -> Result<(), String> {
+        return LifecycleEffects::freeze(&mut effects);
+    }
+
+    fn run_thaw(mut effects: FreezeOnlyCgroupEffects) -> Result<(), String> {
+        return LifecycleEffects::thaw(&mut effects);
+    }
+
+    fn hibernate_results(
+        mut effects: FreezeOnlyCgroupEffects,
+        checkpoint: &LifecycleCheckpoint,
+    ) -> (Result<LifecycleCheckpoint, String>, Result<(), String>) {
+        let checkpoint_result = LifecycleEffects::checkpoint_and_terminate(&mut effects);
+        let restore_result = LifecycleEffects::restore(&mut effects, checkpoint);
+        return (checkpoint_result, restore_result);
     }
 
     #[test]
-    fn freeze_waits_for_kernel_confirmed_frozen_state() {
-        let root = fixture_dir("freeze");
-        write_events(&root, true);
+    fn freeze_waits_for_kernel_confirmed_frozen_state() -> Result<(), Box<dyn Error>> {
+        let root = fixture_dir("freeze")?;
+        write_events(&root, true)?;
         let controller = CgroupV2Controller::new(&root);
-        let mut effects = FreezeOnlyCgroupEffects::with_timing(
+        let effects = FreezeOnlyCgroupEffects::with_timing(
             controller,
             Duration::from_millis(10),
             Duration::from_millis(1),
         );
 
-        assert_eq!(effects.freeze(), Ok(()));
-        assert_eq!(fs::read(root.join("cgroup.freeze")).unwrap(), b"1\n");
-        fs::remove_dir_all(root).unwrap();
+        assert_eq!(run_freeze(effects), Ok(()));
+        assert_eq!(fs::read(root.join("cgroup.freeze")), Ok(b"1\n".to_vec()));
+        assert_eq!(fs::remove_dir_all(root), Ok(()));
+        return Ok(());
     }
 
     #[test]
-    fn thaw_waits_for_kernel_confirmed_thawed_state() {
-        let root = fixture_dir("thaw");
-        write_events(&root, false);
+    fn thaw_waits_for_kernel_confirmed_thawed_state() -> Result<(), Box<dyn Error>> {
+        let root = fixture_dir("thaw")?;
+        write_events(&root, false)?;
         let controller = CgroupV2Controller::new(&root);
-        let mut effects = FreezeOnlyCgroupEffects::with_timing(
+        let effects = FreezeOnlyCgroupEffects::with_timing(
             controller,
             Duration::from_millis(10),
             Duration::from_millis(1),
         );
 
-        assert_eq!(effects.thaw(), Ok(()));
-        assert_eq!(fs::read(root.join("cgroup.freeze")).unwrap(), b"0\n");
-        fs::remove_dir_all(root).unwrap();
+        assert_eq!(run_thaw(effects), Ok(()));
+        assert_eq!(fs::read(root.join("cgroup.freeze")), Ok(b"0\n".to_vec()));
+        assert_eq!(fs::remove_dir_all(root), Ok(()));
+        return Ok(());
     }
 
     #[test]
-    fn hibernate_operations_are_unconditionally_rejected() {
-        let root = fixture_dir("hibernate-disabled");
-        write_events(&root, false);
+    fn hibernate_operations_are_unconditionally_rejected() -> Result<(), Box<dyn Error>> {
+        let root = fixture_dir("hibernate-disabled")?;
+        write_events(&root, false)?;
         let controller = CgroupV2Controller::new(&root);
-        let mut effects = FreezeOnlyCgroupEffects::new(controller);
-
-        assert_eq!(
-            effects.checkpoint_and_terminate(),
-            Err(HIBERNATE_DISABLED.to_owned())
-        );
-
+        let effects = FreezeOnlyCgroupEffects::new(controller);
         let checkpoint = LifecycleCheckpoint {
             artifact_ref: "test://checkpoint".to_owned(),
             digest: "sha256:test".to_owned(),
             format: "test".to_owned(),
         };
-        assert_eq!(
-            effects.restore(&checkpoint),
-            Err(HIBERNATE_DISABLED.to_owned())
-        );
-        fs::remove_dir_all(root).unwrap();
+
+        let (checkpoint_result, restore_result) = hibernate_results(effects, &checkpoint);
+        assert_eq!(checkpoint_result, Err(HIBERNATE_DISABLED.to_owned()));
+        assert_eq!(restore_result, Err(HIBERNATE_DISABLED.to_owned()));
+        assert_eq!(fs::remove_dir_all(root), Ok(()));
+        return Ok(());
     }
 }
