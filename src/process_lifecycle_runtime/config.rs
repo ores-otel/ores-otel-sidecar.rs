@@ -25,17 +25,17 @@ impl LifecycleProduct {
     #[must_use]
     pub const fn required_socket(self) -> &'static str {
         if matches!(self, Self::BeamScale) {
-            return "/run/beamscale-lifecycle/control.sock";
+            return "/run/beamscale-lifecycle/product/control.sock";
         }
-        return "/run/scintilla-lifecycle/control.sock";
+        return "/run/scintilla-lifecycle/product/control.sock";
     }
 
     #[must_use]
     pub const fn required_host_control_socket(self) -> &'static str {
         if matches!(self, Self::BeamScale) {
-            return "/run/beamscale-lifecycle/host-control.sock";
+            return "/run/beamscale-lifecycle/host/control.sock";
         }
-        return "/run/scintilla-lifecycle/host-control.sock";
+        return "/run/scintilla-lifecycle/host/control.sock";
     }
 }
 
@@ -87,7 +87,8 @@ impl LifecycleAgentConfig {
             product,
             required_value(values, "ORES_PROCESS_LIFECYCLE_HOST_CONTROL_SOCKET")?,
         )?;
-        if state_root == checkpoint_root || product_socket == host_control_socket {
+        validate_socket_trust_split(&product_socket, &host_control_socket)?;
+        if state_root == checkpoint_root {
             return Err(LifecycleRuntimeError::InvalidPath);
         }
 
@@ -140,10 +141,11 @@ impl LifecycleAgentConfig {
         for path in [&self.state_root, &self.checkpoint_root, &self.cgroup_root] {
             validate_existing_directory(path)?;
         }
+        validate_socket_trust_split(&self.product_socket, &self.host_control_socket)?;
         for socket in [&self.product_socket, &self.host_control_socket] {
             let parent = socket
                 .parent()
-                .ok_or(LifecycleRuntimeError::InvalidProductSocket)?;
+                .ok_or(LifecycleRuntimeError::InvalidPath)?;
             validate_existing_directory(parent)?;
         }
         return Ok(());
@@ -176,7 +178,7 @@ fn validate_identity_segment(value: &str) -> Result<(), LifecycleRuntimeError> {
     let valid = !value.is_empty()
         && value.len() <= 96
         && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_' || byte == b'.' || byte == b':'
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
         });
     if !valid {
         return Err(LifecycleRuntimeError::InvalidIdentity);
@@ -227,6 +229,28 @@ fn parse_host_control_socket(
     return Ok(path);
 }
 
+fn validate_socket_trust_split(
+    product_socket: &Path,
+    host_control_socket: &Path,
+) -> Result<(), LifecycleRuntimeError> {
+    if product_socket == host_control_socket {
+        return Err(LifecycleRuntimeError::InvalidPath);
+    }
+    let product_parent = product_socket
+        .parent()
+        .ok_or(LifecycleRuntimeError::InvalidPath)?;
+    let host_parent = host_control_socket
+        .parent()
+        .ok_or(LifecycleRuntimeError::InvalidPath)?;
+    if product_parent == host_parent
+        || product_parent.starts_with(host_parent)
+        || host_parent.starts_with(product_parent)
+    {
+        return Err(LifecycleRuntimeError::InvalidPath);
+    }
+    return Ok(());
+}
+
 fn validate_absolute_no_traversal(path: &Path) -> Result<(), LifecycleRuntimeError> {
     if !path.is_absolute() {
         return Err(LifecycleRuntimeError::InvalidPath);
@@ -269,13 +293,13 @@ mod tests {
     fn values(product: &str) -> BTreeMap<String, String> {
         let (product_socket, host_control_socket) = if product == "beamscale" {
             (
-                "/run/beamscale-lifecycle/control.sock",
-                "/run/beamscale-lifecycle/host-control.sock",
+                "/run/beamscale-lifecycle/product/control.sock",
+                "/run/beamscale-lifecycle/host/control.sock",
             )
         } else {
             (
-                "/run/scintilla-lifecycle/control.sock",
-                "/run/scintilla-lifecycle/host-control.sock",
+                "/run/scintilla-lifecycle/product/control.sock",
+                "/run/scintilla-lifecycle/host/control.sock",
             )
         };
         return BTreeMap::from([
@@ -322,13 +346,16 @@ mod tests {
     }
 
     #[test]
-    fn product_and_host_sockets_are_exact_and_product_specific() {
+    fn product_and_host_sockets_are_exact_product_specific_and_separate() {
         assert!(LifecycleAgentConfig::from_values(&values("beamscale")).is_ok());
         let invalid_product = values("beamscale")
             .into_iter()
             .map(|(key, value)| {
                 if key == "ORES_PROCESS_LIFECYCLE_PRODUCT_SOCKET" {
-                    return (key, "/run/scintilla-lifecycle/control.sock".to_owned());
+                    return (
+                        key,
+                        "/run/scintilla-lifecycle/product/control.sock".to_owned(),
+                    );
                 }
                 return (key, value);
             })
@@ -342,7 +369,10 @@ mod tests {
             .into_iter()
             .map(|(key, value)| {
                 if key == "ORES_PROCESS_LIFECYCLE_HOST_CONTROL_SOCKET" {
-                    return (key, "/run/scintilla-lifecycle/host-control.sock".to_owned());
+                    return (
+                        key,
+                        "/run/scintilla-lifecycle/host/control.sock".to_owned(),
+                    );
                 }
                 return (key, value);
             })
@@ -350,6 +380,32 @@ mod tests {
         assert_eq!(
             LifecycleAgentConfig::from_values(&invalid_host),
             Err(LifecycleRuntimeError::InvalidHostControlSocket)
+        );
+
+        assert_ne!(
+            LifecycleProduct::BeamScale.required_socket().rsplit_once('/').map(|value| value.0),
+            LifecycleProduct::BeamScale
+                .required_host_control_socket()
+                .rsplit_once('/')
+                .map(|value| value.0)
+        );
+    }
+
+    #[test]
+    fn shared_or_nested_socket_parent_is_rejected() {
+        assert_eq!(
+            validate_socket_trust_split(
+                Path::new("/run/example/control.sock"),
+                Path::new("/run/example/host-control.sock")
+            ),
+            Err(LifecycleRuntimeError::InvalidPath)
+        );
+        assert_eq!(
+            validate_socket_trust_split(
+                Path::new("/run/example/product/control.sock"),
+                Path::new("/run/example/product/host/control.sock")
+            ),
+            Err(LifecycleRuntimeError::InvalidPath)
         );
     }
 

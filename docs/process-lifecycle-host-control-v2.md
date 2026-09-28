@@ -2,10 +2,17 @@
 
 This is the trusted host/control-plane protocol consumed by `ores-process-lifecycle-agent`. It is intentionally separate from the cooperative BeamScale/Scintilla product-runtime socket.
 
-The host-control server runs outside every tenant-managed process tree and must derive its answers from host/scheduler state, not tenant input. The initial fixed paths remain:
+The host-control server runs outside every tenant-managed process tree and must derive its answers from host/scheduler state, not tenant input. The fixed trusted paths are:
 
-- BeamScale: `/run/beamscale-lifecycle/host-control.sock`
-- Scintilla Run: `/run/scintilla-lifecycle/host-control.sock`
+- BeamScale: `/run/beamscale-lifecycle/host/control.sock`
+- Scintilla Run: `/run/scintilla-lifecycle/host/control.sock`
+
+The cooperative product-runtime sockets use separate parent directories:
+
+- BeamScale: `/run/beamscale-lifecycle/product/control.sock`
+- Scintilla Run: `/run/scintilla-lifecycle/product/control.sock`
+
+This parent-directory split is a security boundary, not cosmetic layout. The product runtime may need write permission on its own socket directory so it can create or replace the cooperative socket. It must never receive write authority on the trusted host-control socket directory, because directory write permission is sufficient to unlink or replace a Unix socket entry even when the socket inode itself is root-owned. Shared or nested product/host socket parents therefore fail configuration validation.
 
 Each request uses one Unix-stream connection. The client sends one newline-terminated request, shuts down its write half, and requires the server to return exactly one newline-terminated response and then close. Missing terminators, multiple frames, CRLF, leading/trailing response whitespace, oversized responses, malformed JSON, unknown JSON fields, and transport ambiguity fail closed.
 
