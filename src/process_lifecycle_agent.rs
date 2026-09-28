@@ -174,10 +174,10 @@ where
             );
         }
         LifecycleAction::Thaw => {
-            return resume_frozen(fencing_token, current, store, host, effects);
+            return resume_frozen(fencing_token, current, store, host, product, effects);
         }
         LifecycleAction::Restore => {
-            return restore_hibernated(fencing_token, current, store, host, effects);
+            return restore_hibernated(fencing_token, current, store, host, product, effects);
         }
         LifecycleAction::CancelQuiesce
         | LifecycleAction::Freeze
@@ -327,16 +327,18 @@ where
     return Ok(ReconcileOutcome::DemandCancelledSuspend);
 }
 
-fn resume_frozen<S, H, E>(
+fn resume_frozen<S, H, P, E>(
     fencing_token: u64,
     current: LifecycleRecord,
     store: &mut S,
     host: &mut H,
+    product: &mut P,
     effects: &mut E,
 ) -> Result<ReconcileOutcome, ReconcileError>
 where
     S: LifecycleRecordStore,
     H: HostLifecycleControl,
+    P: ProductLifecycleControl,
     E: LifecycleEffects,
 {
     let thawing = next_record(
@@ -347,6 +349,9 @@ where
     );
     persist(store, &current, &thawing)?;
     effects.thaw().map_err(ReconcileError::Effect)?;
+    product
+        .cancel_quiesce()
+        .map_err(ReconcileError::Product)?;
     host.verify_ready().map_err(ReconcileError::Host)?;
     let running = next_record(
         &thawing,
@@ -358,16 +363,18 @@ where
     return Ok(ReconcileOutcome::Resumed);
 }
 
-fn restore_hibernated<S, H, E>(
+fn restore_hibernated<S, H, P, E>(
     fencing_token: u64,
     current: LifecycleRecord,
     store: &mut S,
     host: &mut H,
+    product: &mut P,
     effects: &mut E,
 ) -> Result<ReconcileOutcome, ReconcileError>
 where
     S: LifecycleRecordStore,
     H: HostLifecycleControl,
+    P: ProductLifecycleControl,
     E: LifecycleEffects,
 {
     let checkpoint = current
@@ -384,6 +391,9 @@ where
     effects
         .restore(&checkpoint)
         .map_err(ReconcileError::Effect)?;
+    product
+        .cancel_quiesce()
+        .map_err(ReconcileError::Product)?;
     host.verify_ready().map_err(ReconcileError::Host)?;
     let running = next_record(
         &restoring,
