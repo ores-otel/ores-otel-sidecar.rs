@@ -81,6 +81,7 @@ pub struct ControllerScope {
     pub workload_id: String,
     pub node: String,
     pub placement_epoch: u64,
+    pub runtime_epoch: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +101,7 @@ pub enum ReconcileError {
     Effect(String),
     InvalidRecord,
     StalePlacement,
+    StaleRuntime,
     StaleFence,
     InvalidTransition,
     RecoveryRequired(PersistedLifecycleState),
@@ -423,6 +425,10 @@ fn validate_authority(
         return Err(ReconcileError::StalePlacement);
     }
 
+    if record.runtime_epoch != scope.runtime_epoch {
+        return Err(ReconcileError::StaleRuntime);
+    }
+
     if fencing_token < record.fencing_token {
         return Err(ReconcileError::StaleFence);
     }
@@ -451,6 +457,7 @@ fn next_record(
         workload_id: current.workload_id.clone(),
         assigned_node: current.assigned_node.clone(),
         placement_epoch: current.placement_epoch,
+        runtime_epoch: current.runtime_epoch,
         fencing_token,
         revision: current.revision.saturating_add(1),
         state,
