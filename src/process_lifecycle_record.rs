@@ -323,13 +323,23 @@ mod tests {
 
     #[test]
     fn identity_segments_are_bounded_and_path_safe() {
-        let mut value = record();
-        value.workload_id = "../tenant".to_owned();
-        assert_eq!(value.validate(), Err(LifecycleRecordError::InvalidWorkloadId));
+        let invalid_workload = LifecycleRecord {
+            workload_id: "../tenant".to_owned(),
+            ..record()
+        };
+        assert_eq!(
+            invalid_workload.validate(),
+            Err(LifecycleRecordError::InvalidWorkloadId)
+        );
 
-        let mut value = record();
-        value.assigned_node = "node/escape".to_owned();
-        assert_eq!(value.validate(), Err(LifecycleRecordError::InvalidAssignedNode));
+        let invalid_node = LifecycleRecord {
+            assigned_node: "node/escape".to_owned(),
+            ..record()
+        };
+        assert_eq!(
+            invalid_node.validate(),
+            Err(LifecycleRecordError::InvalidAssignedNode)
+        );
     }
 
     #[test]
@@ -363,25 +373,31 @@ mod tests {
     #[test]
     fn replacement_runtime_requires_new_fence_and_running_reset() {
         let current = record();
-        let mut same_fence = current.clone();
-        same_fence.runtime_epoch = 14;
-        same_fence.revision = 12;
-        same_fence.state = PersistedLifecycleState::Running;
+        let same_fence = LifecycleRecord {
+            runtime_epoch: 14,
+            revision: 12,
+            state: PersistedLifecycleState::Running,
+            ..current.clone()
+        };
         assert_eq!(
             validate_record_update(&current, &same_fence),
             Err(LifecycleRecordError::RuntimeChangedWithoutFenceAdvance)
         );
 
-        let mut still_frozen = same_fence.clone();
-        still_frozen.fencing_token = 20;
-        still_frozen.state = PersistedLifecycleState::Frozen;
+        let still_frozen = LifecycleRecord {
+            fencing_token: 20,
+            state: PersistedLifecycleState::Frozen,
+            ..same_fence.clone()
+        };
         assert_eq!(
             validate_record_update(&current, &still_frozen),
             Err(LifecycleRecordError::RuntimeChangedOutsideRunning)
         );
 
-        let mut replacement = same_fence;
-        replacement.fencing_token = 20;
+        let replacement = LifecycleRecord {
+            fencing_token: 20,
+            ..same_fence
+        };
         assert_eq!(validate_record_update(&current, &replacement), Ok(()));
         assert!(!replacement.authorizes_controller("node-a", 7, 13, 20));
         assert!(replacement.authorizes_controller("node-a", 7, 14, 20));
@@ -390,10 +406,12 @@ mod tests {
     #[test]
     fn runtime_epoch_cannot_regress() {
         let current = record();
-        let mut next = current.clone();
-        next.runtime_epoch = 12;
-        next.fencing_token = 20;
-        next.revision = 12;
+        let next = LifecycleRecord {
+            runtime_epoch: 12,
+            fencing_token: 20,
+            revision: 12,
+            ..current.clone()
+        };
 
         assert_eq!(
             validate_record_update(&current, &next),
@@ -402,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_record_without_runtime_epoch_fails_closed() {
+    fn legacy_record_without_runtime_epoch_fails_closed() -> Result<(), serde_json::Error> {
         let encoded = serde_json::json!({
             "workload_id": "tenant-42-shard-3",
             "assigned_node": "node-a",
@@ -413,10 +431,10 @@ mod tests {
             "strategy": "freeze",
             "checkpoint": null
         });
-        let value = serde_json::from_value::<LifecycleRecord>(encoded)
-            .expect("legacy record should deserialize to zero runtime epoch");
+        let value = serde_json::from_value::<LifecycleRecord>(encoded)?;
         assert_eq!(value.runtime_epoch, 0);
         assert_eq!(value.validate(), Err(LifecycleRecordError::ZeroRuntimeEpoch));
+        return Ok(());
     }
 
     #[test]
