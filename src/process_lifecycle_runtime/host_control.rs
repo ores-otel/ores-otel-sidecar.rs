@@ -159,7 +159,7 @@ fn write_request(
 fn read_response(
     mut stream: UnixStream,
     mut chunk: [u8; 4096],
-    mut bytes: Vec<u8>,
+    bytes: Vec<u8>,
 ) -> Result<String, LifecycleRuntimeError> {
     let count = stream
         .read(&mut chunk)
@@ -167,11 +167,11 @@ fn read_response(
     if count == 0 {
         return finish_response(bytes);
     }
-    bytes.extend_from_slice(&chunk[..count]);
-    if bytes.len() > MAX_HOST_RESPONSE_BYTES {
+    let next = [bytes.as_slice(), &chunk[..count]].concat();
+    if next.len() > MAX_HOST_RESPONSE_BYTES {
         return Err(LifecycleRuntimeError::HostControlResponseTooLarge);
     }
-    return read_response(stream, [0_u8; 4096], bytes);
+    return read_response(stream, [0_u8; 4096], next);
 }
 
 fn finish_response(bytes: Vec<u8>) -> Result<String, LifecycleRuntimeError> {
@@ -199,17 +199,29 @@ fn validate_snapshot(
         return Err(LifecycleRuntimeError::InvalidHostControlResponse);
     }
 
-    let mut workload_ids = BTreeSet::new();
-    let mut process_identities = BTreeSet::new();
-    let mut managed_cgroups = BTreeSet::new();
     for workload in &snapshot.workloads {
         validate_workload(workload, cgroup_root, expected_node)?;
-        if !workload_ids.insert(workload.workload_id.clone())
-            || !process_identities.insert((workload.pid, workload.process_start_ticks))
-            || !managed_cgroups.insert(workload.managed_cgroup.clone())
-        {
-            return Err(LifecycleRuntimeError::InvalidHostControlResponse);
-        }
+    }
+    let workload_ids = snapshot
+        .workloads
+        .iter()
+        .map(|workload| workload.workload_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let process_identities = snapshot
+        .workloads
+        .iter()
+        .map(|workload| (workload.pid, workload.process_start_ticks))
+        .collect::<BTreeSet<_>>();
+    let managed_cgroups = snapshot
+        .workloads
+        .iter()
+        .map(|workload| workload.managed_cgroup.as_path())
+        .collect::<BTreeSet<_>>();
+    if workload_ids.len() != snapshot.workloads.len()
+        || process_identities.len() != snapshot.workloads.len()
+        || managed_cgroups.len() != snapshot.workloads.len()
+    {
+        return Err(LifecycleRuntimeError::InvalidHostControlResponse);
     }
     return Ok(());
 }
@@ -341,12 +353,14 @@ mod tests {
     #[test]
     fn rejects_duplicate_logical_process_or_cgroup_identity() {
         let first = workload();
-        let mut duplicate_workload = workload();
-        duplicate_workload.pid += 1;
-        duplicate_workload.process_start_ticks += 1;
-        duplicate_workload.managed_cgroup = PathBuf::from(
-            "/sys/fs/cgroup/beamscale-workloads.slice/other.scope",
-        );
+        let duplicate_workload = TrustedWorkloadSnapshot {
+            pid: first.pid + 1,
+            process_start_ticks: first.process_start_ticks + 1,
+            managed_cgroup: PathBuf::from(
+                "/sys/fs/cgroup/beamscale-workloads.slice/other.scope",
+            ),
+            ..workload()
+        };
         let duplicate_id = TrustedHostSnapshot {
             version: HOST_PROTOCOL_VERSION,
             workloads: vec![first.clone(), duplicate_workload],
@@ -356,11 +370,13 @@ mod tests {
             Err(LifecycleRuntimeError::InvalidHostControlResponse)
         );
 
-        let mut duplicate_process = first.clone();
-        duplicate_process.workload_id = "tenant-43-shard-1".to_owned();
-        duplicate_process.managed_cgroup = PathBuf::from(
-            "/sys/fs/cgroup/beamscale-workloads.slice/tenant-43-shard-1.scope",
-        );
+        let duplicate_process = TrustedWorkloadSnapshot {
+            workload_id: "tenant-43-shard-1".to_owned(),
+            managed_cgroup: PathBuf::from(
+                "/sys/fs/cgroup/beamscale-workloads.slice/tenant-43-shard-1.scope",
+            ),
+            ..first.clone()
+        };
         let duplicate_process_snapshot = TrustedHostSnapshot {
             version: HOST_PROTOCOL_VERSION,
             workloads: vec![first.clone(), duplicate_process],
@@ -370,10 +386,12 @@ mod tests {
             Err(LifecycleRuntimeError::InvalidHostControlResponse)
         );
 
-        let mut duplicate_cgroup = first.clone();
-        duplicate_cgroup.workload_id = "tenant-44-shard-1".to_owned();
-        duplicate_cgroup.pid += 2;
-        duplicate_cgroup.process_start_ticks += 2;
+        let duplicate_cgroup = TrustedWorkloadSnapshot {
+            workload_id: "tenant-44-shard-1".to_owned(),
+            pid: first.pid + 2,
+            process_start_ticks: first.process_start_ticks + 2,
+            ..first.clone()
+        };
         let duplicate_cgroup_snapshot = TrustedHostSnapshot {
             version: HOST_PROTOCOL_VERSION,
             workloads: vec![first, duplicate_cgroup],
@@ -458,15 +476,15 @@ mod tests {
     }
 
     #[test]
-    fn parses_one_line_snapshot_json() {
+    fn parses_one_line_snapshot_json() -> Result<(), serde_json::Error> {
         let encoded = serde_json::to_string(&TrustedHostSnapshot {
             version: HOST_PROTOCOL_VERSION,
             workloads: vec![workload()],
-        })
-        .expect("serialize snapshot");
+        })?;
         assert_eq!(
             finish_response(format!("{encoded}\n").into_bytes()),
             Ok(encoded)
         );
+        return Ok(());
     }
 }
