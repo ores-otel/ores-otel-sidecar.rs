@@ -2,5 +2,6 @@
 
 pub mod linux_process_lifecycle;
 pub mod process_lifecycle_file_store;
+pub mod process_lifecycle_freeze;
 pub mod process_lifecycle_lease;
 mod stream;
