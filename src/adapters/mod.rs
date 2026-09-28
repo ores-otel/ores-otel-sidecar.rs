@@ -6,5 +6,5 @@ pub mod process_lifecycle_file_store;
 pub mod process_lifecycle_freeze;
 pub mod process_lifecycle_lease;
 pub mod process_lifecycle_product_control;
-pub mod process_lifecycle_recovery;
+pub mod process_lifecycle_state_machine_recovery;
 mod stream;
