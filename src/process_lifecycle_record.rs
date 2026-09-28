@@ -413,18 +413,10 @@ mod tests {
             "strategy": "freeze",
             "checkpoint": null
         });
-        let decoded = serde_json::from_value::<LifecycleRecord>(encoded);
-        assert!(matches!(
-            decoded,
-            Ok(LifecycleRecord {
-                runtime_epoch: 0,
-                ..
-            })
-        ));
-        assert_eq!(
-            decoded.and_then(|value| value.validate().map(|_| value)),
-            Err(LifecycleRecordError::ZeroRuntimeEpoch)
-        );
+        let value = serde_json::from_value::<LifecycleRecord>(encoded)
+            .expect("legacy record should deserialize to zero runtime epoch");
+        assert_eq!(value.runtime_epoch, 0);
+        assert_eq!(value.validate(), Err(LifecycleRecordError::ZeroRuntimeEpoch));
     }
 
     #[test]
