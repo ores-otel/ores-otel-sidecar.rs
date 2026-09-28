@@ -82,6 +82,7 @@ pub enum LifecycleRecordError {
     RevisionDidNotAdvance,
     PlacementEpochRegressed,
     PlacementChangedWithoutEpochAdvance,
+    PlacementChangedWithoutRuntimeAdvance,
     RuntimeEpochRegressed,
     RuntimeChangedWithoutFenceAdvance,
     RuntimeChangedOutsideRunning,
@@ -218,8 +219,8 @@ fn valid_checkpoint_digest(value: &str) -> bool {
 ///
 /// A strictly newer fence may continue from any prior revision. Reusing the same
 /// fence is allowed for a multi-step transition, but the durable revision must
-/// advance. Placement and runtime epochs can only move forward. Moving nodes
-/// requires a placement epoch increment. Replacing a runtime incarnation,
+/// advance. Placement and runtime epochs can only move forward. Moving nodes or
+/// advancing placement requires a new runtime incarnation. Replacing a runtime,
 /// including on the same node, requires a strictly newer distributed fence and
 /// resets the durable lifecycle to `running`; a stale frozen/checkpointed record
 /// must never be silently inherited by a new process.
@@ -250,6 +251,12 @@ pub fn validate_record_update(
         && next.placement_epoch <= current.placement_epoch
     {
         return Err(LifecycleRecordError::PlacementChangedWithoutEpochAdvance);
+    }
+
+    let placement_changed = next.assigned_node != current.assigned_node
+        || next.placement_epoch > current.placement_epoch;
+    if placement_changed && next.runtime_epoch <= current.runtime_epoch {
+        return Err(LifecycleRecordError::PlacementChangedWithoutRuntimeAdvance);
     }
 
     if next.runtime_epoch < current.runtime_epoch {
@@ -357,17 +364,39 @@ mod tests {
     }
 
     #[test]
-    fn reassignment_invalidates_old_host_authority() {
+    fn placement_handoff_requires_new_runtime_incarnation() {
         let current = record();
-        let mut next = current.clone();
-        next.assigned_node = "node-b".to_owned();
-        next.placement_epoch = 8;
-        next.fencing_token = 20;
-        next.revision = 12;
+        let next = LifecycleRecord {
+            assigned_node: "node-b".to_owned(),
+            placement_epoch: 8,
+            fencing_token: 20,
+            revision: 12,
+            ..current.clone()
+        };
+
+        assert_eq!(
+            validate_record_update(&current, &next),
+            Err(LifecycleRecordError::PlacementChangedWithoutRuntimeAdvance)
+        );
+    }
+
+    #[test]
+    fn reassignment_invalidates_old_host_and_runtime_authority() {
+        let current = record();
+        let next = LifecycleRecord {
+            assigned_node: "node-b".to_owned(),
+            placement_epoch: 8,
+            runtime_epoch: 14,
+            fencing_token: 20,
+            revision: 12,
+            state: PersistedLifecycleState::Running,
+            ..current.clone()
+        };
 
         assert_eq!(validate_record_update(&current, &next), Ok(()));
         assert!(!next.authorizes_controller("node-a", 7, 13, 19));
-        assert!(next.authorizes_controller("node-b", 8, 13, 20));
+        assert!(!next.authorizes_controller("node-b", 8, 13, 20));
+        assert!(next.authorizes_controller("node-b", 8, 14, 20));
     }
 
     #[test]
