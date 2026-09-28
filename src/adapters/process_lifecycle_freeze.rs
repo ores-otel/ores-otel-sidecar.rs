@@ -142,8 +142,9 @@ mod tests {
         );
 
         assert_eq!(run_freeze(effects), Ok(()));
-        assert_eq!(fs::read(root.join("cgroup.freeze")), Ok(b"1\n".to_vec()));
-        assert_eq!(fs::remove_dir_all(root), Ok(()));
+        let freeze_bytes = fs::read(root.join("cgroup.freeze"))?;
+        assert_eq!(freeze_bytes, b"1\n");
+        fs::remove_dir_all(root)?;
         return Ok(());
     }
 
@@ -159,8 +160,9 @@ mod tests {
         );
 
         assert_eq!(run_thaw(effects), Ok(()));
-        assert_eq!(fs::read(root.join("cgroup.freeze")), Ok(b"0\n".to_vec()));
-        assert_eq!(fs::remove_dir_all(root), Ok(()));
+        let freeze_bytes = fs::read(root.join("cgroup.freeze"))?;
+        assert_eq!(freeze_bytes, b"0\n");
+        fs::remove_dir_all(root)?;
         return Ok(());
     }
 
@@ -179,7 +181,7 @@ mod tests {
         let (checkpoint_result, restore_result) = hibernate_results(effects, &checkpoint);
         assert_eq!(checkpoint_result, Err(HIBERNATE_DISABLED.to_owned()));
         assert_eq!(restore_result, Err(HIBERNATE_DISABLED.to_owned()));
-        assert_eq!(fs::remove_dir_all(root), Ok(()));
+        fs::remove_dir_all(root)?;
         return Ok(());
     }
 }
