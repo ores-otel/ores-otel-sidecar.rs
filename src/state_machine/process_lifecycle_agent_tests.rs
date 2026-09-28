@@ -55,6 +55,7 @@ impl HostLifecycleControl for FakeHost {
 struct FakeProduct {
     quiesce: ProductQuiesceOutcome,
     cancelled: bool,
+    cancel_error: Option<String>,
 }
 
 impl ProductLifecycleControl for FakeProduct {
@@ -64,7 +65,14 @@ impl ProductLifecycleControl for FakeProduct {
 
     fn cancel_quiesce(&mut self) -> Result<(), String> {
         self.cancelled = true;
-        return Ok(());
+        match self.cancel_error.clone() {
+            Some(error) => {
+                return Err(error);
+            }
+            None => {
+                return Ok(());
+            }
+        }
     }
 }
 
@@ -161,11 +169,44 @@ fn product(quiesce: ProductQuiesceOutcome) -> FakeProduct {
     return FakeProduct {
         quiesce,
         cancelled: false,
+        cancel_error: None,
+    };
+}
+
+fn product_with_cancel_error(error: &str) -> FakeProduct {
+    return FakeProduct {
+        quiesce: ProductQuiesceOutcome::Drained,
+        cancelled: false,
+        cancel_error: Some(error.to_owned()),
     };
 }
 
 fn unfrozen_effects() -> FakeEffects {
     return FakeEffects { frozen: false };
+}
+
+fn reconcile_product_resume_failure(
+    mut store: MemoryStore,
+    mut host: FakeHost,
+    mut product: FakeProduct,
+    mut effects: FakeEffects,
+) -> (
+    Result<ReconcileOutcome, ReconcileError>,
+    MemoryStore,
+    FakeHost,
+    FakeProduct,
+    FakeEffects,
+) {
+    let outcome = reconcile_once(
+        &scope(),
+        10,
+        freeze_policy(),
+        &mut store,
+        &mut host,
+        &mut product,
+        &mut effects,
+    );
+    return (outcome, store, host, product, effects);
 }
 
 #[test]
@@ -256,7 +297,7 @@ fn cooperative_demand_return_during_quiesce_leaves_workload_running() {
 }
 
 #[test]
-fn frozen_trusted_demand_thaws_then_requires_host_admission() {
+fn frozen_trusted_demand_thaws_reopens_product_then_requires_host_admission() {
     let mut store = MemoryStore {
         record: record(
             PersistedSuspendStrategy::Freeze,
@@ -281,7 +322,33 @@ fn frozen_trusted_demand_thaws_then_requires_host_admission() {
     assert_eq!(outcome, Ok(ReconcileOutcome::Resumed));
     assert_eq!(store.record.state, PersistedLifecycleState::Running);
     assert!(!effects.frozen);
+    assert!(product.cancelled);
     assert!(host.verified);
+}
+
+#[test]
+fn failed_product_resume_never_publishes_running_after_thaw() {
+    let (outcome, store, host, product, effects) = reconcile_product_resume_failure(
+        MemoryStore {
+            record: record(
+                PersistedSuspendStrategy::Freeze,
+                PersistedLifecycleState::Frozen,
+                None,
+            ),
+        },
+        host_with(vec![demand_activity()]),
+        product_with_cancel_error("product resume failed"),
+        FakeEffects { frozen: true },
+    );
+
+    assert_eq!(
+        outcome,
+        Err(ReconcileError::Product("product resume failed".to_owned()))
+    );
+    assert_eq!(store.record.state, PersistedLifecycleState::Thawing);
+    assert!(!effects.frozen);
+    assert!(product.cancelled);
+    assert!(!host.verified);
 }
 
 #[test]
@@ -316,6 +383,7 @@ fn failed_host_admission_never_publishes_running_after_thaw() {
     );
     assert_eq!(store.record.state, PersistedLifecycleState::Thawing);
     assert!(!effects.frozen);
+    assert!(product.cancelled);
     assert!(host.verified);
 }
 
