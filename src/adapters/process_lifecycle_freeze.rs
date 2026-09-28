@@ -155,8 +155,9 @@ mod tests {
         );
 
         let checkpoint = LifecycleCheckpoint {
+            artifact_ref: "test://checkpoint".to_owned(),
             digest: "sha256:test".to_owned(),
-            bytes: 1,
+            format: "test".to_owned(),
         };
         assert_eq!(
             effects.restore(&checkpoint),
