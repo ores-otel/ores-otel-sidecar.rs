@@ -2,9 +2,9 @@ name: fp-conformance
 
 # Functional-programming conformance ratchet.
 #
-# Pull requests are compared against their exact base SHA with the scanner from
-# the proposed head. That makes the gate differential: pre-existing debt cannot
-# block unrelated work, but a PR cannot increase any finding count. Pushes to
+# Pull requests are compared against their exact base SHA using the scanner from
+# that trusted base revision for both trees. That makes the gate differential
+# without allowing a PR to weaken the scanner and self-exempt. Pushes to
 # main/dev still use the repository's absolute recorded budget.
 #
 # Language-native checks (cargo clippy, eslint, dart analyze) are configured in
@@ -58,21 +58,21 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Use the proposed scanner implementation for both trees so a scanner
-          # change is evaluated consistently rather than comparing two rule sets.
-          cp tools/fp-conformance/fp_conformance.py /tmp/fp_conformance.py
+          # The base scanner is the policy authority for this PR. Using it for
+          # both trees prevents a proposed scanner weakening from self-exempting.
+          git show "$BASE_SHA:tools/fp-conformance/fp_conformance.py" > /tmp/fp_conformance.py
 
           git checkout --detach "$BASE_SHA"
           python3 /tmp/fp_conformance.py . \
             --write-budget /tmp/fp-base-budget.json \
             --limit 60
-          cp /tmp/fp-base-budget.json fp-base-budget.json
 
           git checkout --detach "$HEAD_SHA"
           python3 /tmp/fp_conformance.py . \
             --json fp-findings.json \
             --budget /tmp/fp-base-budget.json \
             --limit 60
+          cp /tmp/fp-base-budget.json fp-base-budget.json
 
       - name: Scan absolute budget
         if: github.event_name != 'pull_request'
