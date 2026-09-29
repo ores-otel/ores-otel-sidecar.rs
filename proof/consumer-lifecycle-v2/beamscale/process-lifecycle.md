@@ -96,8 +96,7 @@ beamscale/runtime-lifecycle/<environment>/<region>/<runtime-id>
 
 `<environment>` and `<region>` are explicit stable deployment dimensions and
 `<runtime-id>` is the logical shard/runtime identity. `cluster` remains trusted
-fleet/control-plane identity but is not a second lock-key namespace. Node identity
-is deliberately excluded so old and new hosts still contend on one lock during
+fleet/control-plane identity but is not a second lock-key namespace. Node identity is deliberately excluded so old and new hosts still contend on one lock during
 reassignment.
 
 Lifecycle config v2 exposes these deployment dimensions separately and derives

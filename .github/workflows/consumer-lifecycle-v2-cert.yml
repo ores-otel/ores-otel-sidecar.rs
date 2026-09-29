@@ -25,14 +25,14 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git hash-object proof/consumer-lifecycle-v2/beamscale/bmscl-lifecycle-agent.nix)" = "c27f59463fe78b30dec5d2a9ec2f2c2e0001de1f"
-          test "$(git hash-object proof/consumer-lifecycle-v2/beamscale/process-lifecycle.md)" = "fbb0771ecd6b282f81526b1d669781df6ebb9b95"
+          test "$(git hash-object proof/consumer-lifecycle-v2/beamscale/process-lifecycle.md)" = "6885dcb1a7d71bfe6ba4ff351a09db0ad7a7261b"
           test "$(git hash-object proof/consumer-lifecycle-v2/beamscale/README.md)" = "0c91fb282317b76c6b9f00a3a74fff526c42af59"
           test "$(git hash-object proof/consumer-lifecycle-v2/scintilla/scintilla-lifecycle-agent.nix)" = "20463a71fe7f4580d55bc504252f5eadfe2b5e8c"
           test "$(git hash-object proof/consumer-lifecycle-v2/scintilla/README.md)" = "816b2d3b8c93ba74993106c8869e0a0f43a12089"
 
       - name: Record production PR heads
         run: |
-          echo "beamscale/bmscl-infra#82 = d8ba548f33f3409c298b6a058ecd05246a0d61bd"
+          echo "beamscale/bmscl-infra#82 = 1204116bfe607b365c8e0ca080e5f63cb4a56dbe"
           echo "scintilla-run/scintilla-infra#45 = 44363869ea16903d67bdae99b229985845c6c0b5"
 
       - name: Assert fail-closed config v2 consumer contracts
