@@ -74,7 +74,7 @@ fn write_process_stat(process_dir: &Path, start_ticks: u64, comm: &str) -> io::R
     return fs::write(
         process_dir.join("stat"),
         format!(
-            "{PID} ({comm}) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 20 0 1 0 {start_ticks} 0\n"
+            "{PID} ({comm}) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 {start_ticks} 0\n"
         ),
     );
 }
@@ -185,7 +185,7 @@ fn symlinked_managed_cgroup_is_rejected() -> io::Result<()> {
 #[test]
 fn stat_parser_handles_spaces_and_parentheses_in_comm() {
     let input = format!(
-        "{PID} (strange worker ) name) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 20 0 1 0 {START_TICKS} 0\n"
+        "{PID} (strange worker ) name) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 {START_TICKS} 0\n"
     );
     assert_eq!(
         parse_proc_stat_start_ticks(&input, PID),
