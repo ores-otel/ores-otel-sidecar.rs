@@ -151,8 +151,8 @@ fn v2_derives_sockets_and_canonical_product_prefix() {
             environment: Some(ref environment),
             region: Some(ref region),
             ..
-        }) if product_socket == "/run/scintilla-lifecycle/product/control.sock"
-            && host_control_socket == "/run/scintilla-lifecycle/host/control.sock"
+        }) if product_socket.as_path() == Path::new("/run/scintilla-lifecycle/product/control.sock")
+            && host_control_socket.as_path() == Path::new("/run/scintilla-lifecycle/host/control.sock")
             && environment == "prod"
             && region == "us-east"
     ));
