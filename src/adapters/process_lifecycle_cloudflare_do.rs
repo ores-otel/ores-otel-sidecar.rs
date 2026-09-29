@@ -120,7 +120,7 @@ impl CloudflareDoLeaseTransport {
         Request: Serialize + ?Sized,
         Response: for<'de> Deserialize<'de>,
     {
-        let response = self
+        let mut response = self
             .client
             .post(format!("{}{}", self.base_url, path))
             .bearer_auth(&self.bearer)
@@ -141,14 +141,16 @@ impl CloudflareDoLeaseTransport {
         {
             return Err("cloudflare-do lease response exceeded its bound".to_owned());
         }
-        let bytes = response
-            .bytes()
+
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
             .await
-            .map_err(|_error| "cloudflare-do lease response body failed".to_owned())?;
-        if bytes.len() as u64 > MAX_RESPONSE_BYTES {
-            return Err("cloudflare-do lease response exceeded its bound".to_owned());
+            .map_err(|_error| "cloudflare-do lease response body failed".to_owned())?
+        {
+            append_bounded_response_chunk(&mut body, &chunk)?;
         }
-        return serde_json::from_slice(&bytes)
+        return serde_json::from_slice(&body)
             .map_err(|_error| "cloudflare-do lease response was invalid JSON".to_owned());
     }
 
@@ -266,6 +268,7 @@ fn normalize_base_url(value: &str) -> Result<String, CloudflareDoTransportConfig
     let parsed = Url::parse(value).map_err(|_error| CloudflareDoTransportConfigError::InvalidBaseUrl)?;
     if parsed.scheme() != "https"
         || parsed.host_str().is_none()
+        || parsed.path() != "/"
         || !parsed.username().is_empty()
         || parsed.password().is_some()
         || parsed.query().is_some()
@@ -274,6 +277,18 @@ fn normalize_base_url(value: &str) -> Result<String, CloudflareDoTransportConfig
         return Err(CloudflareDoTransportConfigError::InvalidBaseUrl);
     }
     return Ok(value.trim_end_matches('/').to_owned());
+}
+
+fn append_bounded_response_chunk(body: &mut Vec<u8>, chunk: &[u8]) -> Result<(), String> {
+    let next_len = body
+        .len()
+        .checked_add(chunk.len())
+        .ok_or_else(|| "cloudflare-do lease response exceeded its bound".to_owned())?;
+    if next_len as u64 > MAX_RESPONSE_BYTES {
+        return Err("cloudflare-do lease response exceeded its bound".to_owned());
+    }
+    body.extend_from_slice(chunk);
+    return Ok(());
 }
 
 fn validate_credential_name(value: &str) -> Result<(), CloudflareDoTransportConfigError> {
@@ -437,6 +452,19 @@ mod tests {
             normalize_base_url("https://locks.example.test/"),
             Ok("https://locks.example.test".to_owned())
         );
+        assert_eq!(
+            normalize_base_url("https://locks.example.test/nested"),
+            Err(CloudflareDoTransportConfigError::InvalidBaseUrl)
+        );
+    }
+
+    #[test]
+    fn response_bound_is_enforced_while_streaming() {
+        let mut body = vec![0_u8; (MAX_RESPONSE_BYTES - 1) as usize];
+        assert!(append_bounded_response_chunk(&mut body, &[1]).is_ok());
+        assert_eq!(body.len() as u64, MAX_RESPONSE_BYTES);
+        assert!(append_bounded_response_chunk(&mut body, &[2]).is_err());
+        assert_eq!(body.len() as u64, MAX_RESPONSE_BYTES);
     }
 
     #[test]
