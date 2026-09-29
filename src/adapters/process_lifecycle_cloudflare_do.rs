@@ -175,89 +175,83 @@ impl CloudflareDoLeaseTransport {
 }
 
 impl ManagedLeaseTransport for CloudflareDoLeaseTransport {
-    fn acquire(
+    async fn acquire(
         &self,
         backend: ManagedLeaseBackend,
         key: &LockKey,
         holder: &str,
         request_id: &str,
         ttl_ms: u64,
-    ) -> impl std::future::Future<Output = Result<ManagedAcquireResult, String>> + Send {
-        async move {
-            require_cloudflare_backend(backend)?;
-            let response = self
-                .post_json::<_, AcquireResponse>(
-                    ACQUIRE_PATH,
-                    &AcquireRequest {
-                        key: key.as_str(),
-                        holder,
-                        request_id,
-                        ttl_ms,
-                    },
-                )
-                .await?;
-            let (result, replayed) = parse_acquire_response(response)?;
-            if !replayed {
-                return Ok(result);
-            }
-            let ManagedAcquireResult::Acquired(grant) = result else {
-                return Err("cloudflare-do replay response was not acquired".to_owned());
-            };
-            let renewed = self
-                .renew_wire(key.as_str(), holder, grant.fencing_token, ttl_ms)
-                .await?;
-            return match renewed {
-                ManagedRenewResult::Renewed { lease_expires_ms } => {
-                    Ok(ManagedAcquireResult::Acquired(ManagedGrant {
-                        fencing_token: grant.fencing_token,
-                        lease_expires_ms,
-                    }))
-                }
-                ManagedRenewResult::Lost => {
-                    Err("cloudflare-do replay renewal refused; fenced authority is lost".to_owned())
-                }
-            };
+    ) -> Result<ManagedAcquireResult, String> {
+        require_cloudflare_backend(backend)?;
+        let response = self
+            .post_json::<_, AcquireResponse>(
+                ACQUIRE_PATH,
+                &AcquireRequest {
+                    key: key.as_str(),
+                    holder,
+                    request_id,
+                    ttl_ms,
+                },
+            )
+            .await?;
+        let (result, replayed) = parse_acquire_response(response)?;
+        if !replayed {
+            return Ok(result);
         }
+        let ManagedAcquireResult::Acquired(grant) = result else {
+            return Err("cloudflare-do replay response was not acquired".to_owned());
+        };
+        let renewed = self
+            .renew_wire(key.as_str(), holder, grant.fencing_token, ttl_ms)
+            .await?;
+        return match renewed {
+            ManagedRenewResult::Renewed { lease_expires_ms } => {
+                Ok(ManagedAcquireResult::Acquired(ManagedGrant {
+                    fencing_token: grant.fencing_token,
+                    lease_expires_ms,
+                }))
+            }
+            ManagedRenewResult::Lost => {
+                Err("cloudflare-do replay renewal refused; fenced authority is lost".to_owned())
+            }
+        };
     }
 
-    fn renew(
+    async fn renew(
         &self,
         backend: ManagedLeaseBackend,
         grant: &LeaseGrant,
         ttl_ms: u64,
-    ) -> impl std::future::Future<Output = Result<ManagedRenewResult, String>> + Send {
-        async move {
-            require_cloudflare_backend(backend)?;
-            return self
-                .renew_wire(
-                    grant.key.as_str(),
-                    &grant.holder,
-                    grant.fencing_token,
-                    ttl_ms,
-                )
-                .await;
-        }
+    ) -> Result<ManagedRenewResult, String> {
+        require_cloudflare_backend(backend)?;
+        return self
+            .renew_wire(
+                grant.key.as_str(),
+                &grant.holder,
+                grant.fencing_token,
+                ttl_ms,
+            )
+            .await;
     }
 
-    fn release(
+    async fn release(
         &self,
         backend: ManagedLeaseBackend,
         grant: &LeaseGrant,
-    ) -> impl std::future::Future<Output = Result<bool, String>> + Send {
-        async move {
-            require_cloudflare_backend(backend)?;
-            let response = self
-                .post_json::<_, ReleaseResponse>(
-                    RELEASE_PATH,
-                    &ReleaseRequest {
-                        key: grant.key.as_str(),
-                        holder: &grant.holder,
-                        fencing_token: grant.fencing_token.to_string(),
-                    },
-                )
-                .await?;
-            return Ok(response.released);
-        }
+    ) -> Result<bool, String> {
+        require_cloudflare_backend(backend)?;
+        let response = self
+            .post_json::<_, ReleaseResponse>(
+                RELEASE_PATH,
+                &ReleaseRequest {
+                    key: grant.key.as_str(),
+                    holder: &grant.holder,
+                    fencing_token: grant.fencing_token.to_string(),
+                },
+            )
+            .await?;
+        return Ok(response.released);
     }
 }
 
