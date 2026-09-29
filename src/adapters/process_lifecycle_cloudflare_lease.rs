@@ -364,3 +364,39 @@ fn parse_safe_u64(value: &Value) -> Option<u64> {
     }
     return Some(parsed);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn in_memory_constructor_enforces_https_and_bearer_bounds() {
+        let valid = CloudflareDoWorkerTransport::for_test(
+            "https://lease.example.test/",
+            "opaque-bearer",
+            (),
+        );
+        assert!(valid.is_ok());
+
+        let insecure = CloudflareDoWorkerTransport::for_test(
+            "http://lease.example.test",
+            "opaque-bearer",
+            (),
+        );
+        assert!(insecure.is_err());
+
+        let multiline = CloudflareDoWorkerTransport::for_test(
+            "https://lease.example.test",
+            "secret\nsecond-line",
+            (),
+        );
+        assert!(multiline.is_err());
+    }
+
+    #[test]
+    fn parser_rejects_zero_and_non_js_safe_fencing_tokens() {
+        assert!(required_positive_safe_u64(&json!({"fencing_token": "1"}), "fencing_token").is_ok());
+        assert!(required_positive_safe_u64(&json!({"fencing_token": "0"}), "fencing_token").is_err());
+        assert!(required_positive_safe_u64(&json!({"fencing_token": "9007199254740992"}), "fencing_token").is_err());
+    }
+}
