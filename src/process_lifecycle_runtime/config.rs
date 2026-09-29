@@ -93,7 +93,6 @@ impl LifecycleAgentConfig {
     ) -> Result<Self, LifecycleRuntimeError> {
         let config_version = parse_config_version(
             optional_value(values, "ORES_PROCESS_LIFECYCLE_CONFIG_VERSION")
-                .as_deref()
                 .unwrap_or(DEFAULT_CONFIG_VERSION),
         )?;
         return match config_version {
