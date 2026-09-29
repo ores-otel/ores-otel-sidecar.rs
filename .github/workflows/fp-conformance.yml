@@ -51,7 +51,7 @@ jobs:
 
       - name: Scan
         run: |
-          python3 tools/fp-conformance/fp_conformance.py . \
+          python3 tools/fp-conformance/fp_conformance_ci.py . \
             --json fp-findings.json \
             --budget tools/fp-conformance/budget.json \
             --limit 60
