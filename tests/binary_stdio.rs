@@ -13,7 +13,7 @@ const RETRY_DELAY: Duration = Duration::from_millis(20);
 
 fn reserve_loopback_port() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("reserve loopback port");
-    return listener.local_addr().expect("reserved address").port();
+    listener.local_addr().expect("reserved address").port()
 }
 
 fn health_response_when_ready(port: u16) -> String {
