@@ -261,11 +261,17 @@ fn parse_proc_stat_start_ticks(
 }
 
 fn parse_proc_cgroup_v2_path(input: &str) -> Result<PathBuf, LinuxProcessIdentityError> {
-    let mut matches = input.lines().filter_map(|line| line.strip_prefix("0::"));
-    let value = matches
-        .next()
-        .ok_or(LinuxProcessIdentityError::InvalidProcCgroup)?;
-    if value.is_empty() || matches.next().is_some() {
+    let (first, count) = input
+        .lines()
+        .filter_map(|line| line.strip_prefix("0::"))
+        .fold((None, 0_usize), |(first, count), value| {
+            return (first.or(Some(value)), count.saturating_add(1));
+        });
+    if count != 1 {
+        return Err(LinuxProcessIdentityError::InvalidProcCgroup);
+    }
+    let value = first.ok_or(LinuxProcessIdentityError::InvalidProcCgroup)?;
+    if value.is_empty() {
         return Err(LinuxProcessIdentityError::InvalidProcCgroup);
     }
     let path = PathBuf::from(value);
