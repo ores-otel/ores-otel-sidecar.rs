@@ -87,7 +87,7 @@ where
             expected,
             fencing_token,
         };
-        let _workload = control.refresh_identity()?;
+        control.revalidate_identity()?;
         return Ok(control);
     }
 
@@ -99,6 +99,16 @@ where
     #[must_use]
     pub const fn fencing_token(&self) -> u64 {
         return self.fencing_token;
+    }
+
+    /// Re-check only the pinned workload authority tuple.
+    ///
+    /// Crash recovery uses this immediately before an effect without consulting
+    /// queue/in-flight demand. Recovery semantics therefore remain based on
+    /// durable intent + kernel state rather than ordinary demand observation.
+    pub fn revalidate_identity(&self) -> Result<(), LifecycleRuntimeError> {
+        let _workload = self.refresh_identity()?;
+        return Ok(());
     }
 
     fn refresh_identity(&self) -> Result<TrustedWorkloadSnapshot, LifecycleRuntimeError> {
@@ -125,7 +135,7 @@ where
         self.authority
             .admit_after_wake(&workload, self.fencing_token)
             .map_err(|error| error.to_string())?;
-        let _after_admission = self.refresh_identity().map_err(|error| error.to_string())?;
+        self.revalidate_identity().map_err(|error| error.to_string())?;
         return Ok(());
     }
 }
