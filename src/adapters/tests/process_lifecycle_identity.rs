@@ -39,6 +39,8 @@ impl Fixture {
             b"0::/beamscale-workloads.slice/workload-7.scope\n",
         )?;
         fs::write(managed_cgroup.join("cgroup.procs"), format!("{PID}\n"))?;
+        write_secure_status(&process_dir)?;
+        write_namespace_links(&process_dir)?;
         return Ok(Self {
             root,
             proc_root,
@@ -77,6 +79,48 @@ fn write_process_stat(process_dir: &Path, start_ticks: u64, comm: &str) -> io::R
             "{PID} ({comm}) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 {start_ticks} 0\n"
         ),
     );
+}
+
+fn write_secure_status(process_dir: &Path) -> io::Result<()> {
+    fs::write(
+        process_dir.join("status"),
+        concat!(
+            "Name:\tworker\n",
+            "NoNewPrivs:\t1\n",
+            "CapInh:\t0000000000000000\n",
+            "CapPrm:\t0000000000000000\n",
+            "CapEff:\t0000000000000000\n",
+            "CapBnd:\t0000000000000000\n",
+            "CapAmb:\t0000000000000000\n",
+        ),
+    )
+}
+
+#[cfg(unix)]
+fn write_namespace_links(process_dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::symlink;
+
+    let ns = process_dir.join("ns");
+    fs::create_dir_all(&ns)?;
+    for (kind, inode) in [("pid", 201_u64), ("user", 202), ("mnt", 203), ("net", 204)] {
+        symlink(format!("{kind}:[{inode}]"), ns.join(kind))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_namespace_links(_process_dir: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+fn isolation(fixture: &Fixture) -> ExpectedLinuxIsolationEnvelope {
+    ExpectedLinuxIsolationEnvelope {
+        process: fixture.identity(),
+        pid_namespace_inode: 201,
+        user_namespace_inode: 202,
+        mount_namespace_inode: 203,
+        network_namespace_inode: 204,
+    }
 }
 
 #[test]
@@ -180,6 +224,119 @@ fn symlinked_managed_cgroup_is_rejected() -> io::Result<()> {
     );
     fixture.cleanup()?;
     return Ok(());
+}
+
+#[cfg(unix)]
+#[test]
+fn exact_namespace_and_privilege_envelope_attests() -> io::Result<()> {
+    let fixture = Fixture::new("isolation-valid")?;
+    let expected = isolation(&fixture);
+    assert_eq!(
+        fixture.attestor().attest_isolation(&expected),
+        Ok(AttestedLinuxIsolationEnvelope {
+            process: fixture.identity(),
+            pid_namespace_inode: 201,
+            user_namespace_inode: 202,
+            mount_namespace_inode: 203,
+            network_namespace_inode: 204,
+            no_new_privs: true,
+            capability_sets_empty: true,
+        })
+    );
+    fixture.cleanup()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn namespace_identity_mismatch_fails_closed() -> io::Result<()> {
+    let fixture = Fixture::new("namespace-mismatch")?;
+    let mut expected = isolation(&fixture);
+    expected.network_namespace_inode = 999;
+    assert_eq!(
+        fixture.attestor().attest_isolation(&expected),
+        Err(LinuxProcessIdentityError::NamespaceMismatch)
+    );
+    fixture.cleanup()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn no_new_privs_must_be_enabled() -> io::Result<()> {
+    let fixture = Fixture::new("nnp-disabled")?;
+    let status = concat!(
+        "Name:\tworker\n",
+        "NoNewPrivs:\t0\n",
+        "CapInh:\t0000000000000000\n",
+        "CapPrm:\t0000000000000000\n",
+        "CapEff:\t0000000000000000\n",
+        "CapBnd:\t0000000000000000\n",
+        "CapAmb:\t0000000000000000\n",
+    );
+    fs::write(fixture.process_dir().join("status"), status)?;
+    assert_eq!(
+        fixture.attestor().attest_isolation(&isolation(&fixture)),
+        Err(LinuxProcessIdentityError::NoNewPrivsDisabled)
+    );
+    fixture.cleanup()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn every_linux_capability_set_must_be_empty() -> io::Result<()> {
+    for (name, field) in [
+        ("cap-inh", "CapInh"),
+        ("cap-prm", "CapPrm"),
+        ("cap-eff", "CapEff"),
+        ("cap-bnd", "CapBnd"),
+        ("cap-amb", "CapAmb"),
+    ] {
+        let fixture = Fixture::new(name)?;
+        let status = [
+            "Name:\tworker".to_owned(),
+            "NoNewPrivs:\t1".to_owned(),
+            format!("CapInh:\t{}", if field == "CapInh" { "0000000000000001" } else { "0000000000000000" }),
+            format!("CapPrm:\t{}", if field == "CapPrm" { "0000000000000001" } else { "0000000000000000" }),
+            format!("CapEff:\t{}", if field == "CapEff" { "0000000000000001" } else { "0000000000000000" }),
+            format!("CapBnd:\t{}", if field == "CapBnd" { "0000000000000001" } else { "0000000000000000" }),
+            format!("CapAmb:\t{}", if field == "CapAmb" { "0000000000000001" } else { "0000000000000000" }),
+        ]
+        .join("\n");
+        fs::write(fixture.process_dir().join("status"), format!("{status}\n"))?;
+        assert_eq!(
+            fixture.attestor().attest_isolation(&isolation(&fixture)),
+            Err(LinuxProcessIdentityError::CapabilitiesNotEmpty),
+            "non-empty {field} must fail"
+        );
+        fixture.cleanup()?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn malformed_or_duplicate_security_status_fails_closed() -> io::Result<()> {
+    let fixture = Fixture::new("bad-status")?;
+    fs::write(
+        fixture.process_dir().join("status"),
+        concat!(
+            "NoNewPrivs:\t1\n",
+            "NoNewPrivs:\t1\n",
+            "CapInh:\t0000000000000000\n",
+            "CapPrm:\t0000000000000000\n",
+            "CapEff:\t0000000000000000\n",
+            "CapBnd:\t0000000000000000\n",
+            "CapAmb:\t0000000000000000\n",
+        ),
+    )?;
+    assert_eq!(
+        fixture.attestor().attest_isolation(&isolation(&fixture)),
+        Err(LinuxProcessIdentityError::InvalidProcStatus)
+    );
+    fixture.cleanup()?;
+    Ok(())
 }
 
 #[test]
