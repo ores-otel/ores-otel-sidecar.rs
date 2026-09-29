@@ -30,6 +30,26 @@ pub struct ExpectedLinuxProcessIdentity {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpectedLinuxIsolationEnvelope {
+    pub process: ExpectedLinuxProcessIdentity,
+    pub pid_namespace_inode: u64,
+    pub user_namespace_inode: u64,
+    pub mount_namespace_inode: u64,
+    pub network_namespace_inode: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttestedLinuxIsolationEnvelope {
+    pub process: ExpectedLinuxProcessIdentity,
+    pub pid_namespace_inode: u64,
+    pub user_namespace_inode: u64,
+    pub mount_namespace_inode: u64,
+    pub network_namespace_inode: u64,
+    pub no_new_privs: bool,
+    pub capability_sets_empty: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinuxProcessIdentityAttestor {
     proc_root: PathBuf,
     cgroup_mount: PathBuf,
@@ -84,6 +104,78 @@ impl LinuxProcessIdentityAttestor {
         }
 
         return Ok(expected.clone());
+    }
+
+    /// Re-attest the exact process/cgroup identity plus the Linux isolation
+    /// envelope that must remain true before hostile-process lifecycle effects
+    /// or post-wake routing admission can become authoritative.
+    pub fn attest_isolation(
+        &self,
+        expected: &ExpectedLinuxIsolationEnvelope,
+    ) -> Result<AttestedLinuxIsolationEnvelope, LinuxProcessIdentityError> {
+        let process = self.attest(&expected.process)?;
+        let pid = expected.process.pid;
+
+        let pid_namespace_inode = self.read_namespace_inode(pid, "pid")?;
+        let user_namespace_inode = self.read_namespace_inode(pid, "user")?;
+        let mount_namespace_inode = self.read_namespace_inode(pid, "mnt")?;
+        let network_namespace_inode = self.read_namespace_inode(pid, "net")?;
+
+        require_namespace("pid", expected.pid_namespace_inode, pid_namespace_inode)?;
+        require_namespace("user", expected.user_namespace_inode, user_namespace_inode)?;
+        require_namespace("mnt", expected.mount_namespace_inode, mount_namespace_inode)?;
+        require_namespace("net", expected.network_namespace_inode, network_namespace_inode)?;
+
+        let status = fs::read_to_string(self.proc_root.join(pid.to_string()).join("status"))
+            .map_err(|_error| LinuxProcessIdentityError::ProcessUnavailable)?;
+        let security = parse_proc_status_security(&status)?;
+
+        // Close the observation window the same way process/cgroup identity is
+        // closed: re-read start/cgroup and namespace identities after status.
+        let final_process = self.attest(&expected.process)?;
+        if process != final_process {
+            return Err(LinuxProcessIdentityError::IdentityChangedDuringAttestation);
+        }
+        for (kind, wanted, observed) in [
+            ("pid", expected.pid_namespace_inode, self.read_namespace_inode(pid, "pid")?),
+            ("user", expected.user_namespace_inode, self.read_namespace_inode(pid, "user")?),
+            ("mnt", expected.mount_namespace_inode, self.read_namespace_inode(pid, "mnt")?),
+            ("net", expected.network_namespace_inode, self.read_namespace_inode(pid, "net")?),
+        ] {
+            require_namespace(kind, wanted, observed)?;
+        }
+
+        if !security.no_new_privs {
+            return Err(LinuxProcessIdentityError::NoNewPrivsDisabled);
+        }
+        if !security.capability_sets_empty {
+            return Err(LinuxProcessIdentityError::CapabilitiesNotEmpty);
+        }
+
+        return Ok(AttestedLinuxIsolationEnvelope {
+            process,
+            pid_namespace_inode,
+            user_namespace_inode,
+            mount_namespace_inode,
+            network_namespace_inode,
+            no_new_privs: true,
+            capability_sets_empty: true,
+        });
+    }
+
+    fn read_namespace_inode(
+        &self,
+        pid: u32,
+        namespace: &'static str,
+    ) -> Result<u64, LinuxProcessIdentityError> {
+        let target = fs::read_link(
+            self.proc_root
+                .join(pid.to_string())
+                .join("ns")
+                .join(namespace),
+        )
+        .map_err(|_error| LinuxProcessIdentityError::ProcessUnavailable)?;
+        return parse_namespace_inode(&target, namespace);
     }
 
     fn validate_expected(
@@ -180,6 +272,11 @@ pub enum LinuxProcessIdentityError {
     InvalidCgroupProcs,
     ProcessNotInManagedCgroup,
     IdentityChangedDuringAttestation,
+    InvalidNamespaceIdentity,
+    NamespaceMismatch,
+    InvalidProcStatus,
+    NoNewPrivsDisabled,
+    CapabilitiesNotEmpty,
 }
 
 impl Display for LinuxProcessIdentityError {
@@ -199,6 +296,11 @@ impl Display for LinuxProcessIdentityError {
             Self::IdentityChangedDuringAttestation => {
                 "Linux process identity changed during lifecycle attestation"
             }
+            Self::InvalidNamespaceIdentity => "Linux namespace identity is invalid",
+            Self::NamespaceMismatch => "Linux namespace identity does not match",
+            Self::InvalidProcStatus => "Linux process security status is invalid",
+            Self::NoNewPrivsDisabled => "Linux process does not have NoNewPrivs enabled",
+            Self::CapabilitiesNotEmpty => "Linux process capability sets are not empty",
         });
     }
 }
@@ -279,6 +381,92 @@ fn parse_proc_cgroup_v2_path(input: &str) -> Result<PathBuf, LinuxProcessIdentit
         return Err(LinuxProcessIdentityError::InvalidProcCgroup);
     }
     return Ok(path);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProcStatusSecurity {
+    no_new_privs: bool,
+    capability_sets_empty: bool,
+}
+
+fn parse_namespace_inode(
+    target: &Path,
+    expected_kind: &str,
+) -> Result<u64, LinuxProcessIdentityError> {
+    let text = target
+        .to_str()
+        .ok_or(LinuxProcessIdentityError::InvalidNamespaceIdentity)?;
+    let prefix = format!("{expected_kind}:[");
+    let inode_text = text
+        .strip_prefix(&prefix)
+        .and_then(|rest| rest.strip_suffix(']'))
+        .ok_or(LinuxProcessIdentityError::InvalidNamespaceIdentity)?;
+    let inode = inode_text
+        .parse::<u64>()
+        .map_err(|_error| LinuxProcessIdentityError::InvalidNamespaceIdentity)?;
+    if inode == 0 {
+        return Err(LinuxProcessIdentityError::InvalidNamespaceIdentity);
+    }
+    return Ok(inode);
+}
+
+fn require_namespace(
+    _kind: &str,
+    expected: u64,
+    observed: u64,
+) -> Result<(), LinuxProcessIdentityError> {
+    if expected == 0 {
+        return Err(LinuxProcessIdentityError::InvalidExpectedIdentity);
+    }
+    if expected != observed {
+        return Err(LinuxProcessIdentityError::NamespaceMismatch);
+    }
+    return Ok(());
+}
+
+fn parse_proc_status_security(input: &str) -> Result<ProcStatusSecurity, LinuxProcessIdentityError> {
+    let no_new_privs = parse_unique_status_value(input, "NoNewPrivs")?;
+    let no_new_privs = match no_new_privs {
+        "1" => true,
+        "0" => false,
+        _ => return Err(LinuxProcessIdentityError::InvalidProcStatus),
+    };
+
+    let mut capability_sets_empty = true;
+    for field in ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"] {
+        let value = parse_unique_status_value(input, field)?;
+        if value.len() != 16
+            || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(LinuxProcessIdentityError::InvalidProcStatus);
+        }
+        let parsed = u64::from_str_radix(value, 16)
+            .map_err(|_error| LinuxProcessIdentityError::InvalidProcStatus)?;
+        capability_sets_empty &= parsed == 0;
+    }
+
+    return Ok(ProcStatusSecurity {
+        no_new_privs,
+        capability_sets_empty,
+    });
+}
+
+fn parse_unique_status_value<'a>(
+    input: &'a str,
+    field: &str,
+) -> Result<&'a str, LinuxProcessIdentityError> {
+    let prefix = format!("{field}:");
+    let mut values = input.lines().filter_map(|line| {
+        let rest = line.strip_prefix(&prefix)?;
+        return Some(rest.trim());
+    });
+    let value = values
+        .next()
+        .ok_or(LinuxProcessIdentityError::InvalidProcStatus)?;
+    if value.is_empty() || values.next().is_some() {
+        return Err(LinuxProcessIdentityError::InvalidProcStatus);
+    }
+    return Ok(value);
 }
 
 fn require_start_ticks(expected: u64, observed: u64) -> Result<(), LinuxProcessIdentityError> {
