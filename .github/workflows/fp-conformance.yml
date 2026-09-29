@@ -2,10 +2,11 @@ name: fp-conformance
 
 # Functional-programming conformance ratchet.
 #
-# Deliberately cheap: stdlib Python, no toolchain, no dependency install, no
-# network. It compares current findings against the recorded budget and fails
-# only on regression, so the pre-existing backlog never blocks a pull request
-# while new violations do.
+# Deliberately cheap: stdlib Python, no toolchain/dependency install. CI scans
+# the exact checked-out head and its first parent with the same scanner, then
+# fails only when a rule/path count increases. This keeps pre-existing backlog
+# from blocking unrelated PRs without re-baselining or increasing the historical
+# budget file.
 #
 # Language-native checks (cargo clippy, eslint, dart analyze) are configured in
 # the tree but not run here, to keep Actions minutes low. See FP-GUIDELINES.md.
@@ -26,6 +27,8 @@ on:
       - '**.ts'
       - '**.tsx'
       - '**.dart'
+      - 'tools/fp-conformance/**'
+      - '.github/workflows/fp-conformance.yml'
   workflow_dispatch:
 
 permissions:
@@ -44,23 +47,38 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 2
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
-      - name: Scan
+      - name: Scan exact head and base
         run: |
+          set -euo pipefail
+          base_commit="$(git rev-parse HEAD^1)"
+          git worktree add --detach /tmp/fp-conformance-base "${base_commit}"
+
+          python3 tools/fp-conformance/fp_conformance_ci.py /tmp/fp-conformance-base \
+            --json fp-base-findings.json \
+            --limit 20 \
+            --quiet
+
           python3 tools/fp-conformance/fp_conformance_ci.py . \
             --json fp-findings.json \
-            --budget tools/fp-conformance/budget.json \
             --limit 60
+
+          python3 tools/fp-conformance/fp_conformance_diff.py \
+            fp-base-findings.json \
+            fp-findings.json
 
       - name: Upload findings
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fp-findings
-          path: fp-findings.json
+          path: |
+            fp-base-findings.json
+            fp-findings.json
           if-no-files-found: ignore
           retention-days: 14
