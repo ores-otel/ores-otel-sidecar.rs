@@ -120,7 +120,7 @@ impl CloudflareDoLeaseTransport {
         Request: Serialize + ?Sized,
         Response: for<'de> Deserialize<'de>,
     {
-        let mut response = self
+        let response = &mut self
             .client
             .post(format!("{}{}", self.base_url, path))
             .bearer_auth(&self.bearer)
@@ -142,7 +142,7 @@ impl CloudflareDoLeaseTransport {
             return Err("cloudflare-do lease response exceeded its bound".to_owned());
         }
 
-        let mut body = Vec::new();
+        let body = &mut Vec::new();
         while let Some(chunk) = response
             .chunk()
             .await
@@ -460,7 +460,7 @@ mod tests {
 
     #[test]
     fn response_bound_is_enforced_while_streaming() {
-        let mut body = vec![0_u8; (MAX_RESPONSE_BYTES - 1) as usize];
+        let body = &mut vec![0_u8; (MAX_RESPONSE_BYTES - 1) as usize];
         assert!(append_bounded_response_chunk(&mut body, &[1]).is_ok());
         assert_eq!(body.len() as u64, MAX_RESPONSE_BYTES);
         assert!(append_bounded_response_chunk(&mut body, &[2]).is_err());
