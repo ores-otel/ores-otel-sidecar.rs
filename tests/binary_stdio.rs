@@ -6,20 +6,38 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+const HEALTH_REQUEST: &[u8] = b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+const READY_DEADLINE: Duration = Duration::from_secs(5);
+const READ_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(500);
+const RETRY_DELAY: Duration = Duration::from_millis(20);
+
 fn reserve_loopback_port() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("reserve loopback port");
-    listener.local_addr().expect("reserved address").port()
+    return listener.local_addr().expect("reserved address").port();
 }
 
-fn connect_when_ready(port: u16) -> TcpStream {
-    let deadline = Instant::now() + Duration::from_secs(5);
+fn health_response_when_ready(port: u16) -> String {
+    let deadline = Instant::now() + READY_DEADLINE;
+    let mut last_response = String::new();
+
     while Instant::now() < deadline {
-        if let Ok(stream) = TcpStream::connect(("127.0.0.1", port)) {
-            return stream;
+        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
+            let _ = stream.set_read_timeout(Some(READ_ATTEMPT_TIMEOUT));
+            if stream.write_all(HEALTH_REQUEST).is_ok() {
+                let mut response = String::new();
+                let _ = stream.read_to_string(&mut response);
+                if response.starts_with("HTTP/1.1 200 OK") {
+                    return response;
+                }
+                last_response = response;
+            }
         }
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(RETRY_DELAY);
     }
-    panic!("sidecar never listened on reserved loopback port {port}");
+
+    panic!(
+        "sidecar never completed a health request on reserved loopback port {port}; last response {last_response:?}"
+    );
 }
 
 fn assert_closed_diagnostic(stderr: &[u8], operation: &str) {
@@ -55,17 +73,9 @@ fn binary_listens_on_loopback_and_leaves_stdout_quiet() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn sidecar");
-    let mut stream = connect_when_ready(port);
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
-    stream
-        .write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
-        .unwrap();
-    let mut buf = String::new();
-    let _ = stream.read_to_string(&mut buf);
-    assert!(buf.starts_with("HTTP/1.1 200 OK"), "{buf}");
-    assert!(buf.contains("ores-otel-sidecar"));
+
+    let response = health_response_when_ready(port);
+    assert!(response.contains("ores-otel-sidecar"));
 
     let _ = child.kill();
     let output = child.wait_with_output().unwrap();
@@ -88,25 +98,13 @@ fn kubelet_exec_probe_hits_loopback_and_stays_off_stdout() {
         .spawn()
         .expect("spawn sidecar");
 
-    // A successful TCP connect only proves the kernel has published the listen
-    // socket. Complete one real health request so the single-threaded server has
-    // entered and returned from its request path before executing the next
-    // one-shot probe process. This removes a scheduler-dependent startup race in
-    // slower Docker builds without weakening the probe assertion itself.
-    let mut warmup = connect_when_ready(port);
-    warmup
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .expect("set warmup read timeout");
-    warmup
-        .write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
-        .expect("write warmup health request");
-    let mut warmup_response = String::new();
-    let _ = warmup.read_to_string(&mut warmup_response);
-    assert!(
-        warmup_response.starts_with("HTTP/1.1 200 OK"),
-        "warmup response {warmup_response}"
-    );
-    drop(warmup);
+    // A successful TCP connect only proves that the kernel published the listen
+    // socket. Require a complete 200 response before launching the one-shot
+    // probe. Slow ARM Docker runners can accept a connection while the process
+    // is not yet ready to complete the first request, so readiness must be an
+    // HTTP-level bounded retry rather than a one-connect assertion.
+    let warmup_response = health_response_when_ready(port);
+    assert!(warmup_response.starts_with("HTTP/1.1 200 OK"));
 
     let probe = Command::new(env!("CARGO_BIN_EXE_ores-otel-sidecar"))
         .arg("probe")
