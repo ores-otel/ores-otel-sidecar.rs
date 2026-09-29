@@ -150,7 +150,7 @@ impl CloudflareDoLeaseTransport {
         {
             append_bounded_response_chunk(body, &chunk)?;
         }
-        return serde_json::from_slice(&body)
+        return serde_json::from_slice(body)
             .map_err(|_error| "cloudflare-do lease response was invalid JSON".to_owned());
     }
 
