@@ -11,6 +11,13 @@ files = []
 allow_unknown = false
 command_env = "ORES_PROCESS_LIFECYCLE_COMMAND"
 
+[flags.config-version]
+env = "ORES_PROCESS_LIFECYCLE_CONFIG_VERSION"
+aliases = ["config-version"]
+type = "string"
+default = "v1"
+help = "Lifecycle agent configuration contract version: v1 compatibility or v2 typed authority."
+
 [flags.product]
 env = "ORES_PROCESS_LIFECYCLE_PRODUCT"
 aliases = ["product"]
@@ -23,7 +30,21 @@ env = "ORES_PROCESS_LIFECYCLE_CLUSTER"
 aliases = ["cluster"]
 type = "string"
 default = ""
-help = "Stable deployment/fleet cluster identity used in lifecycle lease keys."
+help = "Stable deployment/fleet cluster identity used for trusted host identity."
+
+[flags.environment]
+env = "ORES_PROCESS_LIFECYCLE_ENVIRONMENT"
+aliases = ["environment"]
+type = "string"
+default = ""
+help = "v2 deployment environment component of the canonical lifecycle lease key."
+
+[flags.region]
+env = "ORES_PROCESS_LIFECYCLE_REGION"
+aliases = ["region"]
+type = "string"
+default = ""
+help = "v2 region component of the canonical lifecycle lease key."
 
 [flags.node]
 env = "ORES_PROCESS_LIFECYCLE_NODE"
@@ -44,7 +65,7 @@ env = "ORES_PROCESS_LIFECYCLE_CHECKPOINT_ROOT"
 aliases = ["checkpoint-root"]
 type = "string"
 default = ""
-help = "Root-owned CRIU checkpoint staging root."
+help = "v1 compatibility only: root-owned CRIU checkpoint staging root. v2 freeze/thaw grants no checkpoint authority."
 
 [flags.cgroup-root]
 env = "ORES_PROCESS_LIFECYCLE_CGROUP_ROOT"
@@ -58,14 +79,14 @@ env = "ORES_PROCESS_LIFECYCLE_PRODUCT_SOCKET"
 aliases = ["product-socket"]
 type = "string"
 default = ""
-help = "Fixed product-owned cooperative Unix control socket. Must match the product adapter contract."
+help = "v1 compatibility only. v2 derives the fixed cooperative Unix socket from the product adapter."
 
 [flags.host-control-socket]
 env = "ORES_PROCESS_LIFECYCLE_HOST_CONTROL_SOCKET"
 aliases = ["host-control-socket"]
 type = "string"
 default = ""
-help = "Fixed trusted host/control-plane Unix socket for placement, demand, process identity, isolation evidence, and post-wake admission."
+help = "v1 compatibility only. v2 derives the fixed trusted host/control-plane Unix socket from the product adapter."
 
 [flags.reconcile-seconds]
 env = "ORES_PROCESS_LIFECYCLE_RECONCILE_SECONDS"
@@ -79,7 +100,35 @@ env = "ORES_PROCESS_LIFECYCLE_LEASE_BACKEND"
 aliases = ["lease-backend"]
 type = "string"
 default = "cloudflare-do"
-help = "Distributed lifecycle fence backend. v1 accepts cloudflare-do only."
+help = "v1 compatibility lease backend. v1 accepts cloudflare-do only."
+
+[flags.lease-provider]
+env = "ORES_PROCESS_LIFECYCLE_LEASE_PROVIDER"
+aliases = ["lease-provider"]
+type = "string"
+default = "cloudflare-do"
+help = "v2 provider-neutral lease authority selector. Cloudflare Durable Objects is the initial provider."
+
+[flags.lease-endpoint]
+env = "ORES_PROCESS_LIFECYCLE_LEASE_ENDPOINT"
+aliases = ["lease-endpoint"]
+type = "string"
+default = ""
+help = "v2 credential-free absolute HTTPS lease API endpoint. Required for freeze_thaw, optional for observe."
+
+[flags.credential-name]
+env = "ORES_PROCESS_LIFECYCLE_CREDENTIAL_NAME"
+aliases = ["credential-name"]
+type = "string"
+default = ""
+help = "v2 systemd LoadCredential name containing the lease bearer. Required for freeze_thaw; the secret value never enters argv or env."
+
+[flags.effects]
+env = "ORES_PROCESS_LIFECYCLE_EFFECTS"
+aliases = ["effects"]
+type = "string"
+default = "observe"
+help = "v2 typed effect mode: observe or freeze_thaw. Generic v2 grants no CRIU/checkpoint authority."
 
 [flags.hibernate-enabled]
 env = "ORES_PROCESS_LIFECYCLE_HIBERNATE_ENABLED"
@@ -88,7 +137,7 @@ type = "bool"
 default = false
 true_aliases = ["t", "1", "yes"]
 false_aliases = ["f", "0", "no"]
-help = "Permit checkpoint/terminate/restore only for separately certified workload classes."
+help = "v1 compatibility only. v2 rejects this legacy authority switch when true."
 
 [flags.effects-enabled]
 env = "ORES_PROCESS_LIFECYCLE_EFFECTS_ENABLED"
@@ -97,7 +146,7 @@ type = "bool"
 default = false
 true_aliases = ["t", "1", "yes"]
 false_aliases = ["f", "0", "no"]
-help = "Enable lifecycle mutations. The agent still fails closed when true until record/lease/attestation/recovery composition lands."
+help = "v1 compatibility mutation switch. v2 rejects this legacy switch and uses the typed effects mode."
 
 [commands.preflight]
 env = "ORES_PROCESS_LIFECYCLE_COMMAND_PREFLIGHT"
@@ -105,8 +154,8 @@ help = "Validate flags, authority paths, both socket contracts, and local host p
 
 [commands.probe-product]
 env = "ORES_PROCESS_LIFECYCLE_COMMAND_PROBE_PRODUCT"
-help = "Perform one bounded read-only v1 status handshake with the cooperative product runtime."
+help = "Perform one bounded read-only status handshake with the cooperative product runtime."
 
 [commands.probe-host]
 env = "ORES_PROCESS_LIFECYCLE_COMMAND_PROBE_HOST"
-help = "Perform one bounded read-only v1 snapshot handshake with the trusted host/control-plane lifecycle authority."
+help = "Perform one bounded read-only snapshot handshake with the trusted host/control-plane lifecycle authority."
