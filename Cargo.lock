@@ -124,7 +124,7 @@ dependencies = [
 [[package]]
 name = "ores-locks-and-leases"
 version = "0.1.1"
-source = "git+https://github.com/ORESoftware/ores-locks-and-leases.git?rev=3ce41cc8f654089c76828ce93e8ce0fc31f773d1#3ce41cc8f654089c76828ce93e8ce0fc31f773d1"
+source = "git+https://github.com/ORESoftware/ores-locks-and-leases.git?rev=9f541b02d4a28665b34b0f70e844473826a8a160#9f541b02d4a28665b34b0f70e844473826a8a160"
 
 [[package]]
 name = "ores-otel-sidecar"
