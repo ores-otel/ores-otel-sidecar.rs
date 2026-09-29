@@ -103,3 +103,7 @@ impl FreezeTransitionEffects for AttestedFreezeOnlyCgroupEffects {
         return Ok(status);
     }
 }
+
+#[cfg(test)]
+#[path = "tests/process_lifecycle_attested_freeze.rs"]
+mod tests;
