@@ -81,6 +81,20 @@ type = "string"
 default = "cloudflare-do"
 help = "Distributed lifecycle fence backend. v1 accepts cloudflare-do only."
 
+[flags.lease-endpoint]
+env = "ORES_PROCESS_LIFECYCLE_LEASE_ENDPOINT"
+aliases = ["lease-endpoint"]
+type = "string"
+default = ""
+help = "HTTPS endpoint for the Cloudflare Durable Object lifecycle lease authority. Must not contain credentials."
+
+[flags.lease-credential-name]
+env = "ORES_PROCESS_LIFECYCLE_LEASE_CREDENTIAL_NAME"
+aliases = ["lease-credential-name"]
+type = "string"
+default = ""
+help = "Name of the systemd credential file containing the lease bearer. This value is a file name, never bearer material."
+
 [flags.hibernate-enabled]
 env = "ORES_PROCESS_LIFECYCLE_HIBERNATE_ENABLED"
 aliases = ["hibernate-enabled"]
@@ -101,7 +115,7 @@ help = "Enable lifecycle mutations. The agent still fails closed when true until
 
 [commands.preflight]
 env = "ORES_PROCESS_LIFECYCLE_COMMAND_PREFLIGHT"
-help = "Validate flags, authority paths, both socket contracts, and local host prerequisites without connecting or mutating."
+help = "Validate flags, authority paths, lease endpoint/credential name, both socket contracts, and local host prerequisites without connecting or mutating."
 
 [commands.probe-product]
 env = "ORES_PROCESS_LIFECYCLE_COMMAND_PROBE_PRODUCT"
