@@ -23,7 +23,8 @@ path = "src/bin/ores-process-lifecycle-agent.rs"
 [dependencies]
 basic-toml = "=0.1.10"
 flags2env = { git = "https://github.com/flags-2-env/flags-2-env.git", rev = "fbd927d0a9c91617a04ae8f4ee7647253846dbd6", package = "flags2env" }
-ores-locks-and-leases = { git = "https://github.com/ORESoftware/ores-locks-and-leases.git", rev = "3ce41cc8f654089c76828ce93e8ce0fc31f773d1", package = "ores-locks-and-leases" }
+ores-locks-and-leases = { git = "https://github.com/ORESoftware/ores-locks-and-leases.git", rev = "9f541b02d4a28665b34b0f70e844473826a8a160", package = "ores-locks-and-leases" }
+reqwest = { version = "=0.13.5", default-features = false, features = ["json", "rustls", "webpki-roots"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = { version = "=0.39.6", default-features = false, features = ["disk", "system"] }
