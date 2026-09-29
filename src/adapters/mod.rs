@@ -7,4 +7,5 @@ pub mod process_lifecycle_file_store;
 pub mod process_lifecycle_freeze;
 pub mod process_lifecycle_lease;
 pub mod process_lifecycle_product_control;
+pub mod state_machine;
 mod stream;

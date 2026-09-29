@@ -18,6 +18,16 @@ const DEFAULT_EFFECT_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const HIBERNATE_DISABLED: &str = "hibernate effects are disabled for freeze-only lifecycle adapter";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FreezeTransitionStatus {
+    pub populated: bool,
+    pub frozen: bool,
+}
+
+pub trait FreezeTransitionEffects: LifecycleEffects {
+    fn freeze_status(&mut self) -> Result<FreezeTransitionStatus, String>;
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FreezeOnlyCgroupEffects {
     controller: CgroupV2Controller,
@@ -76,6 +86,16 @@ impl LifecycleEffects for FreezeOnlyCgroupEffects {
 
     fn restore(&mut self, _checkpoint: &LifecycleCheckpoint) -> Result<(), String> {
         return Err(HIBERNATE_DISABLED.to_owned());
+    }
+}
+
+impl FreezeTransitionEffects for FreezeOnlyCgroupEffects {
+    fn freeze_status(&mut self) -> Result<FreezeTransitionStatus, String> {
+        let status = self.controller.status().map_err(|error| error.to_string())?;
+        return Ok(FreezeTransitionStatus {
+            populated: status.populated,
+            frozen: status.frozen,
+        });
     }
 }
 
