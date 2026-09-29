@@ -210,6 +210,7 @@ fn validate_recovery_authority(
     if record.workload_id != scope.workload_id
         || record.assigned_node != scope.node
         || record.placement_epoch != scope.placement_epoch
+        || record.runtime_epoch != scope.runtime_epoch
     {
         return Err(ReconcileError::StalePlacement);
     }
@@ -243,6 +244,7 @@ fn next_record(
         workload_id: current.workload_id.clone(),
         assigned_node: current.assigned_node.clone(),
         placement_epoch: current.placement_epoch,
+        runtime_epoch: current.runtime_epoch,
         fencing_token,
         revision: current.revision.saturating_add(1),
         state,
@@ -346,6 +348,7 @@ mod tests {
             workload_id: "workload-7".to_owned(),
             node: "node-a".to_owned(),
             placement_epoch: 4,
+            runtime_epoch: 8,
         };
     }
 
@@ -361,6 +364,7 @@ mod tests {
             workload_id: "workload-7".to_owned(),
             assigned_node: "node-a".to_owned(),
             placement_epoch: 4,
+            runtime_epoch: 8,
             fencing_token: 9,
             revision: 12,
             state,
@@ -422,6 +426,7 @@ mod tests {
 
         require(outcome == FreezeRecoveryOutcome::Frozen, "expected Frozen outcome")?;
         require(record.state == PersistedLifecycleState::Frozen, "expected durable Frozen")?;
+        require(record.runtime_epoch == 8, "expected runtime epoch to be preserved")?;
         require(record.fencing_token == 10, "expected fresh fence")?;
         require(!verified, "Frozen recovery must not admit host routing")?;
         require(!reopened, "Frozen recovery must keep product sealed")?;
@@ -477,6 +482,42 @@ mod tests {
         require(verified, "host admission must be verified")?;
         require(reopened, "product must be reopened")?;
         return require(thaw_calls == 0, "already-thawed recovery must not replay thaw");
+    }
+
+    #[test]
+    fn stale_runtime_epoch_fails_closed_before_effects() -> Result<(), String> {
+        let mut store = MemoryStore {
+            record: record(PersistedLifecycleState::Freezing),
+        };
+        let mut host = FakeHost { verified: false };
+        let mut product = FakeProduct { reopened: false };
+        let mut effects = FakeEffects {
+            status: FreezeTransitionStatus {
+                populated: true,
+                frozen: true,
+            },
+            thaw_calls: 0,
+        };
+        let mut stale_scope = scope();
+        stale_scope.runtime_epoch = 9;
+
+        let result = recover_freeze_transition(
+            10,
+            &stale_scope,
+            policy(),
+            &mut store,
+            &mut host,
+            &mut product,
+            &mut effects,
+        );
+
+        require(
+            result == Err(ReconcileError::StalePlacement),
+            "runtime epoch mismatch must fail closed",
+        )?;
+        require(store.record.state == PersistedLifecycleState::Freezing, "record must stay Freezing")?;
+        require(!host.verified, "host must not be admitted")?;
+        return require(!product.reopened, "product must stay sealed");
     }
 
     #[test]
