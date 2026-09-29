@@ -4,7 +4,7 @@
 //! control seams required before effects can be composed: the cooperative
 //! product runtime and the trusted host/control-plane authority. Durable CAS,
 //! distributed lease transport, process attestation, and effect reconciliation
-//! are still mandatory before `effects_enabled=true` may be honored.
+//! are still mandatory before mutation effects may be honored.
 
 #![forbid(unsafe_code)]
 
@@ -17,7 +17,10 @@ use std::time::Duration;
 
 use flags2env::BundledFlags2Env;
 
-pub use config::{LifecycleAgentConfig, LifecycleProduct};
+pub use config::{
+    LifecycleAgentConfig, LifecycleConfigVersion, LifecycleEffectsMode, LifecycleLeaseProvider,
+    LifecycleProduct,
+};
 pub use host_control::{
     TrustedHostAdmission, TrustedHostControlClient, TrustedHostSnapshot, TrustedWorkloadSnapshot,
 };
@@ -52,7 +55,13 @@ pub enum LifecycleRuntimeError {
     InvalidHostControlSocket,
     InvalidReconcileSeconds,
     InvalidBoolean,
+    InvalidConfigVersion,
     UnsupportedLeaseBackend,
+    UnsupportedLeaseProvider,
+    InvalidLeaseEndpoint,
+    InvalidCredentialName,
+    InvalidEffectsMode,
+    MissingLeaseAuthority,
     UnsupportedHost,
     MissingCgroupV2,
     MissingHostDirectory,
@@ -86,7 +95,7 @@ impl LifecycleRuntimeError {
             Self::InvalidCliConfiguration => "lifecycle CLI contract is invalid",
             Self::InvalidArguments => "lifecycle CLI arguments are invalid",
             Self::InvalidProduct => "unsupported lifecycle product adapter",
-            Self::InvalidIdentity => "invalid lifecycle cluster/node identity",
+            Self::InvalidIdentity => "invalid lifecycle deployment identity",
             Self::InvalidPath => "invalid lifecycle authority path",
             Self::InvalidProductSocket => "product socket does not match the product contract",
             Self::InvalidHostControlSocket => {
@@ -94,7 +103,15 @@ impl LifecycleRuntimeError {
             }
             Self::InvalidReconcileSeconds => "invalid lifecycle reconciliation cadence",
             Self::InvalidBoolean => "invalid lifecycle boolean value",
-            Self::UnsupportedLeaseBackend => "unsupported lifecycle lease backend",
+            Self::InvalidConfigVersion => "unsupported lifecycle configuration contract version",
+            Self::UnsupportedLeaseBackend => "unsupported v1 lifecycle lease backend",
+            Self::UnsupportedLeaseProvider => "unsupported lifecycle lease provider",
+            Self::InvalidLeaseEndpoint => "invalid lifecycle lease authority endpoint",
+            Self::InvalidCredentialName => "invalid lifecycle systemd credential name",
+            Self::InvalidEffectsMode => "unsupported lifecycle effects mode",
+            Self::MissingLeaseAuthority => {
+                "active lifecycle effects require a lease endpoint and credential name"
+            }
             Self::UnsupportedHost => "process lifecycle agent requires Linux",
             Self::MissingCgroupV2 => "cgroup v2 is unavailable",
             Self::MissingHostDirectory => "required lifecycle host directory is missing",
