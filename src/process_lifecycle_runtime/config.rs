@@ -6,6 +6,8 @@ use super::LifecycleRuntimeError;
 
 const MIN_RECONCILE_SECONDS: u64 = 1;
 const MAX_RECONCILE_SECONDS: u64 = 3600;
+const MAX_LEASE_ENDPOINT_BYTES: usize = 2048;
+const MAX_LEASE_CREDENTIAL_NAME_BYTES: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LifecycleProduct {
@@ -50,6 +52,8 @@ pub struct LifecycleAgentConfig {
     pub product_socket: PathBuf,
     pub host_control_socket: PathBuf,
     pub reconcile_seconds: u64,
+    pub lease_endpoint: String,
+    pub lease_credential_name: String,
     pub hibernate_enabled: bool,
     pub effects_enabled: bool,
 }
@@ -106,6 +110,14 @@ impl LifecycleAgentConfig {
         if backend != "cloudflare-do" {
             return Err(LifecycleRuntimeError::UnsupportedLeaseBackend);
         }
+        let lease_endpoint = parse_lease_endpoint(required_value(
+            values,
+            "ORES_PROCESS_LIFECYCLE_LEASE_ENDPOINT",
+        )?)?;
+        let lease_credential_name = parse_lease_credential_name(required_value(
+            values,
+            "ORES_PROCESS_LIFECYCLE_LEASE_CREDENTIAL_NAME",
+        )?)?;
 
         let hibernate_enabled = parse_bool(required_value(
             values,
@@ -126,6 +138,8 @@ impl LifecycleAgentConfig {
             product_socket,
             host_control_socket,
             reconcile_seconds,
+            lease_endpoint,
+            lease_credential_name,
             hibernate_enabled,
             effects_enabled,
         });
@@ -184,6 +198,39 @@ fn validate_identity_segment(value: &str) -> Result<(), LifecycleRuntimeError> {
         return Err(LifecycleRuntimeError::InvalidIdentity);
     }
     return Ok(());
+}
+
+fn parse_lease_endpoint(value: String) -> Result<String, LifecycleRuntimeError> {
+    let normalized = value.trim_end_matches('/');
+    let authority = normalized
+        .strip_prefix("https://")
+        .ok_or(LifecycleRuntimeError::InvalidLeaseEndpoint)?;
+    let valid = !authority.is_empty()
+        && normalized.len() <= MAX_LEASE_ENDPOINT_BYTES
+        && !normalized
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+        && !normalized.contains('?')
+        && !normalized.contains('#')
+        && !authority.contains('@');
+    if !valid {
+        return Err(LifecycleRuntimeError::InvalidLeaseEndpoint);
+    }
+    return Ok(normalized.to_owned());
+}
+
+fn parse_lease_credential_name(value: String) -> Result<String, LifecycleRuntimeError> {
+    let valid = !value.is_empty()
+        && value.len() <= MAX_LEASE_CREDENTIAL_NAME_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && value != "."
+        && value != "..";
+    if !valid {
+        return Err(LifecycleRuntimeError::InvalidLeaseCredentialName);
+    }
+    return Ok(value);
 }
 
 fn parse_authority_path(value: String) -> Result<PathBuf, LifecycleRuntimeError> {
@@ -335,6 +382,14 @@ mod tests {
                 "cloudflare-do".to_owned(),
             ),
             (
+                "ORES_PROCESS_LIFECYCLE_LEASE_ENDPOINT".to_owned(),
+                "https://lifecycle-locks.example.test".to_owned(),
+            ),
+            (
+                "ORES_PROCESS_LIFECYCLE_LEASE_CREDENTIAL_NAME".to_owned(),
+                "cloudflare-do-bearer".to_owned(),
+            ),
+            (
                 "ORES_PROCESS_LIFECYCLE_HIBERNATE_ENABLED".to_owned(),
                 "false".to_owned(),
             ),
@@ -440,6 +495,42 @@ mod tests {
         assert_eq!(
             LifecycleAgentConfig::from_values(&invalid),
             Err(LifecycleRuntimeError::InvalidPath)
+        );
+    }
+
+    #[test]
+    fn lease_authority_config_is_non_secret_and_fail_closed() {
+        let config = LifecycleAgentConfig::from_values(&values("beamscale"))
+            .expect("valid lifecycle config");
+        assert_eq!(config.lease_endpoint, "https://lifecycle-locks.example.test");
+        assert_eq!(config.lease_credential_name, "cloudflare-do-bearer");
+
+        let insecure = values("beamscale")
+            .into_iter()
+            .map(|(key, value)| {
+                if key == "ORES_PROCESS_LIFECYCLE_LEASE_ENDPOINT" {
+                    return (key, "http://lifecycle-locks.example.test".to_owned());
+                }
+                return (key, value);
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            LifecycleAgentConfig::from_values(&insecure),
+            Err(LifecycleRuntimeError::InvalidLeaseEndpoint)
+        );
+
+        let traversal = values("beamscale")
+            .into_iter()
+            .map(|(key, value)| {
+                if key == "ORES_PROCESS_LIFECYCLE_LEASE_CREDENTIAL_NAME" {
+                    return (key, "../bearer".to_owned());
+                }
+                return (key, value);
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            LifecycleAgentConfig::from_values(&traversal),
+            Err(LifecycleRuntimeError::InvalidLeaseCredentialName)
         );
     }
 
