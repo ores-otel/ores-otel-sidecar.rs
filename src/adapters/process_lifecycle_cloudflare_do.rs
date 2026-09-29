@@ -148,7 +148,7 @@ impl CloudflareDoLeaseTransport {
             .await
             .map_err(|_error| "cloudflare-do lease response body failed".to_owned())?
         {
-            append_bounded_response_chunk(&mut body, &chunk)?;
+            append_bounded_response_chunk(body, &chunk)?;
         }
         return serde_json::from_slice(&body)
             .map_err(|_error| "cloudflare-do lease response was invalid JSON".to_owned());
@@ -461,9 +461,9 @@ mod tests {
     #[test]
     fn response_bound_is_enforced_while_streaming() {
         let body = &mut vec![0_u8; (MAX_RESPONSE_BYTES - 1) as usize];
-        assert!(append_bounded_response_chunk(&mut body, &[1]).is_ok());
+        assert!(append_bounded_response_chunk(body, &[1]).is_ok());
         assert_eq!(body.len() as u64, MAX_RESPONSE_BYTES);
-        assert!(append_bounded_response_chunk(&mut body, &[2]).is_err());
+        assert!(append_bounded_response_chunk(body, &[2]).is_err());
         assert_eq!(body.len() as u64, MAX_RESPONSE_BYTES);
     }
 
