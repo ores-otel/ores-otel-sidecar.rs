@@ -6,6 +6,7 @@ pub mod process_lifecycle_cloudflare_do;
 pub mod process_lifecycle_controller;
 pub mod process_lifecycle_file_store;
 pub mod process_lifecycle_freeze;
+pub mod process_lifecycle_host_control;
 pub mod process_lifecycle_identity;
 pub mod process_lifecycle_lease;
 pub mod process_lifecycle_product_control;
