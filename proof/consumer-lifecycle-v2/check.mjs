@@ -119,5 +119,10 @@ requireAll(carrierWorkflow, [
   'beamscale/bmscl-infra#82 = 1204116bfe607b365c8e0ca080e5f63cb4a56dbe',
   'scintilla-run/scintilla-infra#45 = 44363869ea16903d67bdae99b229985845c6c0b5',
 ], "carrier workflow receipt");
+requireAll(carrierWorkflow, [
+  "permissions:",
+  "contents: read",
+  "persist-credentials: false",
+], "carrier workflow security policy");
 
 console.log("consumer lifecycle config v2 exact-file contracts: ok");
