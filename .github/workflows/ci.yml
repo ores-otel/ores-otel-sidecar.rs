@@ -41,7 +41,7 @@ jobs:
           npm install --no-save --package-lock=false --ignore-scripts \
             @typespec/compiler@1.15.0 @typespec/json-schema@1.15.0
       - name: Enforce peer TypeSpec and JSON Schema authorities with TJSV
-        uses: ORESoftware/typespec-json-schema-validator@bd503465dab8c5148fee722b443ed04ff126c9bf
+        uses: ORESoftware/typespec-json-schema-validator@2281843126ab644607b11cf8281d84f382d68dfc
         with:
           typespec: contracts/sidecar/main.tsp
           schema: contracts/sidecar/authored.schema.json
