@@ -108,4 +108,21 @@ forbidAll(scintillaReadme, [
   'ORES_PROCESS_LIFECYCLE_PRODUCT_SOCKET',
 ], "Scintilla README");
 
+
+const carrierWorkflow = await readFile(".github/workflows/consumer-lifecycle-v2-cert.yml", "utf8");
+requireAll(carrierWorkflow, [
+  'c27f59463fe78b30dec5d2a9ec2f2c2e0001de1f',
+  '6885dcb1a7d71bfe6ba4ff351a09db0ad7a7261b',
+  '0c91fb282317b76c6b9f00a3a74fff526c42af59',
+  '20463a71fe7f4580d55bc504252f5eadfe2b5e8c',
+  '816b2d3b8c93ba74993106c8869e0a0f43a12089',
+  'beamscale/bmscl-infra#82 = 1204116bfe607b365c8e0ca080e5f63cb4a56dbe',
+  'scintilla-run/scintilla-infra#45 = 44363869ea16903d67bdae99b229985845c6c0b5',
+], "carrier workflow receipt");
+requireAll(carrierWorkflow, [
+  "permissions:",
+  "contents: read",
+  "persist-credentials: false",
+], "carrier workflow security policy");
+
 console.log("consumer lifecycle config v2 exact-file contracts: ok");
