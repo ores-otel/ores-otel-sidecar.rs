@@ -1,0 +1,12 @@
+import class ServiceReadiness from "../src/service_readiness";
+pub routine main() -> int {
+  let mut ServiceReadiness healthy = new ServiceReadiness(true);
+  let mut ServiceReadiness unready = new ServiceReadiness(false);
+  if !healthy.is_ready() || unready.is_ready(); then return 1; fi
+  unready.set_ready(true);
+  if !unready.is_ready(); then return 2; fi
+  healthy.set_ready(false);
+  if healthy.is_ready(); then return 3; fi
+  if healthy.failure_count() != 1; then return 4; fi
+  return 0;
+}

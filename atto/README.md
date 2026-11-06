@@ -1,0 +1,1 @@
+A portable AttoLang per-service readiness state candidate with a standalone nonzero-exit guest. It does not implement socket or wire parsing. The Rust E2E suite covers independent sidecar HTTP listeners and recovery after invalid requests. Host tests are not Atto compiler evidence.

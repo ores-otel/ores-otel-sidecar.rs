@@ -1,0 +1,12 @@
+// AttoLang candidate: derive per-service readiness without sharing state.
+define pub class ServiceReadiness as
+  let bool available = false;
+  let int failures = 0;
+  pub constructor(bool available) { self.available = available; }
+  pub fnc set_ready(mut self)(bool ready) -> void {
+    self.available = ready;
+    if !ready; then self.failures = self.failures + 1; fi
+  }
+  pub is_ready() -> bool { return self.available; }
+  pub failure_count() -> int { return self.failures; }
+end
