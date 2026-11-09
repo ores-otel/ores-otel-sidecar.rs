@@ -286,14 +286,16 @@ fn bounded_line<R: BufRead>(
 /// EOF without the mandatory empty CRLF header terminator is a truncated
 /// message, never a successfully completed health/metrics request.
 fn read_headers<R: BufRead>(reader: &mut R) -> Result<Headers, Reject> {
-    let mut headers = Headers::default();
-    loop {
+    // At most 32 recursive folds: Headers::with rejects the next field.
+    // Keeping the accumulator immutable also preserves our FP lint budget.
+    fn fold<R: BufRead>(reader: &mut R, headers: Headers) -> Result<Headers, Reject> {
         match bounded_line(reader, MAX_HEADER_LINE, Reject::HeaderTooLarge)? {
             Some(line) if line == "\r\n" => return Ok(headers),
-            Some(line) => headers = headers.with(&line)?,
+            Some(line) => return fold(reader, headers.with(&line)?),
             None => return Err(Reject::Invalid),
         }
     }
+    return fold(reader, Headers::default());
 }
 
 fn read_request(stream: &mut TcpStream) -> Request {
