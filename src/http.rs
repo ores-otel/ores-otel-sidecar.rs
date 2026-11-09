@@ -190,93 +190,137 @@ struct Headers {
 
 impl Headers {
     fn with(self, line: &str) -> Result<Self, Reject> {
-        if line.as_bytes().contains(&0) || !line.contains(':') {
+        let line = line.strip_suffix("\r\n").ok_or(Reject::Invalid)?;
+        let (name, raw_value) = line.split_once(':').ok_or(Reject::Invalid)?;
+        // RFC 9110 field names use a nonempty sequence of permitted token bytes.
+        // Reject leading whitespace, control bytes and ambiguous delimiters.
+        if name.is_empty()
+            || !name.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_|~".contains(&byte) || byte == 0x60
+            })
+        {
             return Err(Reject::Invalid);
         }
+        if raw_value
+            .bytes()
+            .any(|byte| (byte < 0x20 && byte != b'\t') || byte == 0x7f)
+        {
+            return Err(Reject::Invalid);
+        }
+        let value = raw_value.trim();
         let count = self.count + 1;
         if count > MAX_HEADERS {
             return Err(Reject::HeaderTooLarge);
         }
-        let lower = line.to_ascii_lowercase();
-        let saw_host = if lower.starts_with("host:") {
-            let value = line
-                .split_once(':')
-                .map(|(_, rest)| rest.trim())
-                .unwrap_or("");
-            if value.is_empty() {
+
+        let mut saw_host = self.saw_host;
+        let mut content_length = self.content_length;
+        if name.eq_ignore_ascii_case("host") {
+            if saw_host || value.is_empty() {
                 return Err(Reject::Invalid);
             }
-            true
-        } else {
-            self.saw_host
-        };
-        if lower.starts_with("expect:") || lower.starts_with("transfer-encoding:") {
+            saw_host = true;
+        } else if name.eq_ignore_ascii_case("expect")
+            || name.eq_ignore_ascii_case("transfer-encoding")
+        {
             return Err(Reject::BodyNotAllowed);
-        }
-        let content_length = match lower.strip_prefix("content-length:") {
-            Some(rest) => {
-                let parsed = rest.trim().parse().unwrap_or(u64::MAX);
-                if self
-                    .content_length
-                    .is_some_and(|previous| previous != parsed)
-                {
-                    return Err(Reject::Invalid);
-                }
-                Some(parsed)
+        } else if name.eq_ignore_ascii_case("content-length") {
+            // Refuse even identical duplicate lengths: intermediaries can disagree
+            // about how duplicate framing fields should be interpreted.
+            if content_length.is_some()
+                || value.is_empty()
+                || !value.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Err(Reject::Invalid);
             }
-            None => self.content_length,
-        };
-        Ok(Self {
+            content_length = Some(value.parse().map_err(|_| Reject::Invalid)?);
+        }
+        return Ok(Self {
             count,
             content_length,
             saw_host,
-        })
+        });
     }
 }
 
-/// The header lines as the stream yields them, terminators included. The
-/// iterator ends at EOF or at the blank line that closes the header block, and
-/// yields the rejection for an unreadable or oversized line.
-fn header_lines<R: BufRead>(reader: &mut R) -> impl Iterator<Item = Result<String, Reject>> + '_ {
-    std::iter::from_fn(move || {
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => None,
-            Ok(_) if line.len() > MAX_HEADER_LINE => Some(Err(Reject::HeaderTooLarge)),
-            Ok(_) if line == "\r\n" || line == "\n" => None,
-            Ok(_) => Some(Ok(line)),
-            Err(_) => Some(Err(Reject::Invalid)),
+/// Read at most limit bytes on the wire. BufReader::read_line would allocate an
+/// unbounded String before a caller could enforce its length limit.
+fn bounded_line<R: BufRead>(
+    reader: &mut R,
+    limit: usize,
+    overflow: Reject,
+) -> Result<Option<String>, Reject> {
+    let mut bytes = Vec::with_capacity(limit.min(256));
+    loop {
+        let (consumed, ended) = {
+            let available = reader.fill_buf().map_err(|_| Reject::Invalid)?;
+            if available.is_empty() {
+                return if bytes.is_empty() {
+                    Ok(None)
+                } else {
+                    Err(Reject::Invalid)
+                };
+            }
+            let consumed = available
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(available.len(), |index| index + 1);
+            if bytes.len() + consumed > limit {
+                return Err(overflow);
+            }
+            bytes.extend_from_slice(&available[..consumed]);
+            (consumed, available[consumed - 1] == b'\n')
+        };
+        reader.consume(consumed);
+        if ended {
+            break;
         }
-    })
+    }
+    let line = String::from_utf8(bytes).map_err(|_| Reject::Invalid)?;
+    if !line.ends_with("\r\n") {
+        return Err(Reject::Invalid);
+    }
+    return Ok(Some(line));
+}
+
+/// EOF without the mandatory empty CRLF header terminator is a truncated
+/// message, never a successfully completed health/metrics request.
+fn read_headers<R: BufRead>(reader: &mut R) -> Result<Headers, Reject> {
+    // At most 32 recursive folds: Headers::with rejects the next field.
+    // Keeping the accumulator immutable also preserves our FP lint budget.
+    fn fold<R: BufRead>(reader: &mut R, headers: Headers) -> Result<Headers, Reject> {
+        match bounded_line(reader, MAX_HEADER_LINE, Reject::HeaderTooLarge)? {
+            Some(line) if line == "\r\n" => return Ok(headers),
+            Some(line) => return fold(reader, headers.with(&line)?),
+            None => return Err(Reject::Invalid),
+        }
+    }
+    return fold(reader, Headers::default());
 }
 
 fn read_request(stream: &mut TcpStream) -> Request {
     let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    match reader.read_line(&mut line) {
-        Ok(0) => return Request::Reject(Reject::Invalid),
-        Ok(_) if line.len() > MAX_REQUEST_LINE => return Request::Reject(Reject::LineTooLong),
-        Ok(_) => {}
-        Err(_) => return Request::Reject(Reject::Invalid),
-    }
-    let http11 = line.contains("HTTP/1.1");
+    let line = match bounded_line(&mut reader, MAX_REQUEST_LINE, Reject::LineTooLong) {
+        Ok(Some(line)) => line,
+        Ok(None) | Err(Reject::Invalid) => return Request::Reject(Reject::Invalid),
+        Err(reject) => return Request::Reject(reject),
+    };
     let classified = classify_request_line(&line);
-    let headers = match header_lines(&mut reader)
-        .try_fold(Headers::default(), |headers, line| headers.with(&line?))
-    {
+    if matches!(classified, Request::Reject(_)) {
+        return classified;
+    }
+    let http11 = line.ends_with("HTTP/1.1\r\n");
+    let headers = match read_headers(&mut reader) {
         Ok(headers) => headers,
         Err(reject) => return Request::Reject(reject),
     };
-    if matches!(classified, Request::Ok { .. }) && http11 && !headers.saw_host {
+    if http11 && !headers.saw_host {
         return Request::Reject(Reject::Invalid);
     }
-    let content_length = headers.content_length.unwrap_or(0);
-    if content_length > 0 {
-        let mut sink = vec![0_u8; content_length.min(64) as usize];
-        let _ = reader.read(&mut sink);
+    if headers.content_length.unwrap_or(0) > 0 {
         return Request::Reject(Reject::BodyNotAllowed);
     }
-    classified
+    return classified;
 }
 
 pub fn handle_connection(
