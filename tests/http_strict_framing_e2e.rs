@@ -147,12 +147,12 @@ fn oversized_lines_reject_early_and_next_request_recovers() {
     let (addr, worker) = serve(4);
     let large_header = format!(
         "GET /readyz HTTP/1.1\r\nHost: localhost\r\nX-Fill: {}\r\n\r\n",
-        "x".repeat(256 * 1024)
+        "x".repeat(4 * 1024)
     );
     status(&exchange(addr, large_header.as_bytes()), 431);
     let large_request_line = format!(
         "GET /{} HTTP/1.1\r\nHost: localhost\r\n\r\n",
-        "a".repeat(16 * 1024)
+        "a".repeat(4 * 1024)
     );
     status(&exchange(addr, large_request_line.as_bytes()), 431);
     status(
