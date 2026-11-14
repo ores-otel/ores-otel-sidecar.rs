@@ -75,4 +75,3 @@ pub fn probe_get(addr: SocketAddr, path: &str) -> io::Result<u16> {
         )
     })
 }
-
