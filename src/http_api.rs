@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
@@ -34,10 +34,13 @@ pub fn probe_get(addr: SocketAddr, path: &str) -> io::Result<u16> {
     )?;
     stream.flush()?;
 
-    let mut reader = BufReader::new(stream);
+    // Apply the limit BEFORE reading the line. read_line on an unrestricted
+    // socket can allocate arbitrarily on a peer that never sends a newline.
+    let reader = BufReader::new(stream);
+    let mut bounded_reader = BufReader::new(reader.take((MAX_STATUS_LINE + 1) as u64));
     let mut status_line = String::new();
-    let bytes = reader.read_line(&mut status_line)?;
-    if bytes == 0 || bytes > MAX_STATUS_LINE {
+    let bytes = bounded_reader.read_line(&mut status_line)?;
+    if bytes == 0 || bytes > MAX_STATUS_LINE || !status_line.ends_with('\n') {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "invalid sidecar probe status line",
